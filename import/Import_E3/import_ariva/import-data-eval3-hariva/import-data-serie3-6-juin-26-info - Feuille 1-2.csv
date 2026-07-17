@@ -1,0 +1,5 @@
+ref_employe,nom,genre,identifiant,mdp,heure_travail_semaine,poste
+1,Rakotobe,homme,rakoto1,hImsghv2pqC0,35,Comptable
+2,Rasoabe,femme,rasoa1,hImsghv2pqC0,35,Technicien
+3,Rajao,homme,rajao1,hImsghv2pqC0,30,Vente
+4,Rajenja,homme,rajenja1,hImsghv2pqC0,40,Technicien
