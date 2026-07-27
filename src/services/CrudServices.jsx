@@ -1,10 +1,11 @@
-// src/services/CrudService.jsx
+// src/services/CrudService.js
 import { apiClient } from "../api/apiClient";
-// Ajustez le chemin selon votre structure
+
+// URL de ton backend Flask intermédiaire (si besoin de routes personnalisées comme /remises)
 const FLASK_API_URL = "http://localhost:5000/api";
 
 // =========================================================
-// GESTION DES EMPLOYÉS / UTILISATEURS (Endpoints: /users)
+// 👤 GESTION DES EMPLOYÉS / UTILISATEURS (Endpoints: /users)
 // =========================================================
 
 /**
@@ -26,17 +27,15 @@ export const getEmployes = async () => {
 export const createEmploye = async (employeData) => {
   try {
     const payload = {
-      login: employeData.identifiant,
+      login: employeData.identifiant || employeData.login,
       lastname: employeData.nom,
       firstname: employeData.prenom || '',
       gender: employeData.genre === 'homme' ? 'man' : 'woman',
-      password: employeData.mdp,
-      job: employeData.poste, 
+      password: employeData.mdp || '123456',
+      job: employeData.poste || '', 
       statut: 1, 
-      note_private: `Ref externe: ${employeData.ref_employe}, Poste: ${employeData.poste}, Heures/semaine: ${employeData.heure_travail_semaine}`
+      note_private: `Ref externe: ${employeData.ref_employe || ''}, Heures/semaine: ${employeData.heure_travail_semaine || 35}`
     };
-
-    console.log("Envoi du payload employé à Dolibarr :", payload);
 
     return await apiClient('/users', {
       method: 'POST',
@@ -64,7 +63,7 @@ export const deleteEmploye = async (userId) => {
 
 
 // =========================================================
-// GESTION DES SALAIRES / REMUNERATIONS (Endpoints: /salaries)
+// 💰 GESTION DES SALAIRES / REMUNERATIONS (Endpoints: /salaries)
 // =========================================================
 
 /**
@@ -81,16 +80,17 @@ export const getSalaires = async () => {
 };
 
 /**
- * Créer une fiche de salaire liée à un utilisateur avec ses paiements fractionnés
+ * Créer une fiche de salaire ou enregistrer une rémunération
  */
 export const createSalaire = async (salaireData) => {
   try {
     const payload = {
-      fk_user: salaireData.ref_employe,
-      date_start: salaireData.date_debut,
-      date_end: salaireData.date_fin,
+      fk_user: salaireData.fk_user || salaireData.ref_employe,
+      datesp: salaireData.date_debut, // Date début de période dans Dolibarr
+      dateep: salaireData.date_fin,   // Date fin de période dans Dolibarr
+      datep: salaireData.date_paiement || new Date().toISOString().split('T')[0], // Date du paiement
       amount: parseFloat(salaireData.montant),
-      payments: salaireData.paiements || [] 
+      label: salaireData.libelle || `Paiement Salaire - ${salaireData.date_debut}`
     };
 
     return await apiClient('/salaries', {
@@ -105,40 +105,59 @@ export const createSalaire = async (salaireData) => {
 
 
 // =========================================================
-// DOCUMENT UPLOAD / IMAGES ZIP (Endpoints: /documents)
+// 📁 DOCUMENT UPLOAD / IMAGES (Endpoints: /documents)
 // =========================================================
 
 /**
- * Envoyer un fichier (image extraite du ZIP) lié à un employé spécifique dans Dolibarr
+ * Envoyer un fichier (image/document) rattaché à un employé spécifique
  */
-export const uploadEmployeDocument = async (fileBlob, fileName, employeId) => {
+export const uploadEmployeDocument = async (fileBlob, fileName, employeRef) => {
   try {
     const formData = new FormData();
     formData.append('file', fileBlob, fileName);
     formData.append('filename', fileName);
     formData.append('modulepart', 'user');
-    formData.append('ref', employeId);
+    formData.append('ref', employeRef);
 
+    // Ne PAS définir 'Content-Type', le navigateur doit s'en charger avec la clef boundary
     return await apiClient('/documents/upload', {
       method: 'POST',
-      body: formData,
-      headers: {
-        'Content-Type': null 
-      }
+      body: formData
     });
   } catch (error) {
-    console.error(`Erreur lors de l'upload de l'image ${fileName} pour l'employé #${employeId} :`, error);
+    console.error(`Erreur lors de l'upload du document ${fileName} :`, error);
     throw error;
   }
 };
 
 
 // =========================================================
-// PURGE ET NETTOYAGE GLOBAL (Bouton Réinitialiser)
+// 🏷️ CONFIGURATION DES REMISES (Flask Backend / SQLite)
+// =========================================================
+
+export const getRemisesConfig = async () => {
+  try {
+    const res = await fetch(`${FLASK_API_URL}/remises`);
+    if (!res.ok) throw new Error("Erreur de récupération des remises");
+    return await res.json();
+  } catch (error) {
+    console.error("Erreur lors du chargement de la grille de remises :", error);
+    return [
+      { max_days: 0, discount_percentage: 30 },
+      { max_days: 7, discount_percentage: 15 },
+      { max_days: 30, discount_percentage: 10 },
+      { max_days: 9999, discount_percentage: 0 }
+    ];
+  }
+};
+
+
+// =========================================================
+// 🧹 PURGE ET NETTOYAGE GLOBAL
 // =========================================================
 
 /**
- * Purge complète des salaires insérés (Simulé ou via requêtes DELETE itératives)
+ * Purge complète des fiches de salaires
  */
 export const purgeAllSalaires = async (onProgressLog) => {
   try {
@@ -147,7 +166,7 @@ export const purgeAllSalaires = async (onProgressLog) => {
 
     if (!salaires || salaires.length === 0) return { success: true, count: 0 };
 
-    if (onProgressLog) onProgressLog(`Purge de ${salaires.length} fiches de salaires en cours...`);
+    if (onProgressLog) onProgressLog(`Purge de ${salaires.length} fiches de salaires...`);
 
     for (const sal of salaires) {
       const id = sal.id || sal.rowid;
@@ -159,7 +178,7 @@ export const purgeAllSalaires = async (onProgressLog) => {
 
     return { success: true, count: totalPurged };
   } catch (error) {
-    console.error("Erreur lors du nettoyage global des salaires :", error);
+    console.error("Erreur lors de la purge globale des salaires :", error);
     throw error;
   }
 };

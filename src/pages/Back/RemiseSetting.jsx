@@ -158,7 +158,7 @@ export default function RemiseSettings() {
                         padding: "0.5rem",
                         borderRadius: "var(--radius-md)",
                         border: `1px solid ${status === "error" ? "#f87171" : "var(--border-color, #334155)"}`,
-                        background: "var(--bg-secondary, #1e293b)",
+                        background: "var(--bg-secondary, #ffff)",
                         color: "var(--text-primary, #f1f5f9)",
                         textAlign: "right",
                       }}

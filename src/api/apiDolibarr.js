@@ -286,7 +286,6 @@ export const apiDolibarr = {
     }
   },
 
-  // --- PAYMENTS ---
  // --- PAYMENTS ---
   createPayment: async (data) => {
     try {
@@ -465,24 +464,6 @@ export const apiDolibarr = {
       }
 
       let generatedSqlScript = null;
-
-      if (blockedPayments.size > 0 || blockedInvoices.size > 0 || blockedProducts.size > 0 || blockedThirdparties.size > 0) {
-        log("\n⚠️ Nettoyage complémentaire SQL disponible si verrous FK actifs.");
-
-        generatedSqlScript = `START TRANSACTION;
-DELETE pf FROM llx_paiement_facture pf INNER JOIN llx_facture f ON f.rowid = pf.fk_facture WHERE f.ref LIKE 'IN%' OR f.ref LIKE 'F%' OR f.ref_client LIKE 'F%';
-DELETE FROM llx_paiement_facture;
-DELETE FROM llx_paiement;
-DELETE fd FROM llx_facturedet fd INNER JOIN llx_facture f ON f.rowid = fd.fk_facture WHERE f.ref LIKE 'IN%' OR f.ref LIKE 'F%' OR f.ref_client LIKE 'F%';
-DELETE FROM llx_facture WHERE ref LIKE 'IN%' OR ref LIKE 'F%' OR ref_client LIKE 'F%';
-DELETE FROM llx_product_price;
-DELETE FROM llx_product_lang;
-DELETE FROM llx_product;
-DELETE FROM llx_societe WHERE client = 1;
-COMMIT;`;
-      } else {
-        log('\n✨ Purge complète réussie !');
-      }
 
       return {
         success: blockedPayments.size === 0 && blockedInvoices.size === 0 && blockedProducts.size === 0,
