@@ -1,0 +1,55 @@
+1. prix produit mettre sur catalogue, via import (FrontOffice.jsx)
+    -> prix max ttc (prix unitaire*taxe)
+     exemple : import-data-série4 - detail_facture.csv (source)
+        -> pu_hors_Taxe = 1800, taxe = 14.50% => pu_hors_Taxe*taxe*100 = 1800*14.50%*100 = 2610 €
+
+2. Quand on ajoute panier, on voit qt, nom produit et zone remise en % (en pop-up) (FrontOffice.jsx)
+    Prix zone de liste des produits (prix et taxe en %) (new page)
+    -> on voit tout les produits mode liste si plusieur mm type 
+        exemple : P1 
+            listes produits (choix unique ou multiple) : 1000euro 10%, 2000euro 1%, 1500 50%
+            Qte : - nb +
+            Remise : ...%
+            Valider  
+
+3. Reglement : (Payment.jsx)
+    choisir facture, en totaliter le paiement (possible partielle pour demain)
+
+scenario exemple :
+    reduce 30% et fact 1000€ ttc, payer :
+    dolibarr payer en 1000€ (montant facture original)
+    stock en autre endroit le 30%
+
+    dashbord ajout colonne : (dashboard.jsx)
+    colonne facture original et montant facture payer reelement (avec remise) et remise reglement
+    suivant notre exemple :
+    1000 | 700 | 300
+
+
+    scenario : (à faire lors du test)
+    reset et import 
+    vente (frontoffice)
+    config reglement (remisesetting)
+    saisie reglement (payment)
+    dashboard (vérification)
+
+    INFO
+Reinitialiser données
+
+Configuration remise
+0jours = 30%
+Moins de 7jours = 20%
+Moins de 15jours = 15%
+Moins de 30jours = 10%
+Autres = 0%
+
+Achat 
+F003 = 1 P1 avec (1800  / 14,50%); et 2 P2 avec (1200 / 20%)
+
+Reglement / paiement
+F003 , 27/07/2026
+
+Dashboard
+Montant total Original : 12125,4
+Montant total payé : 9287, 34
+Montant total Remise : 2838,06

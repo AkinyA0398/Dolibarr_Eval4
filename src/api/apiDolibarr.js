@@ -35,6 +35,51 @@ const normalizeAmount = (value) => {
 };
 
 /**
+ * Fonction utilitaire centralisée pour nettoyer et parser proprement la taxe du CSV.
+ * Retourne 0 si la valeur est absente, vide ou invalide, sans forcer de valeur par défaut.
+ * Supporte tous les champs Dolibarr possibles : taux, rate, tva_tx, taxe, vat_rate, tva, default_vat_code, tx, taux_tva.
+ */
+const parseTaxRate = (val) => {
+  if (typeof val === 'number') {
+    const parsed = parseFloat(val);
+    return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed;
+  }
+  if (!val || String(val).trim() === '') return 0;
+
+  let rawVal = val;
+  // Si c'est un objet, extraire le premier champ TVA disponible
+  if (typeof rawVal === 'object' && rawVal !== null) {
+    rawVal = 
+      rawVal.taux ?? 
+      rawVal.rate ?? 
+      rawVal.tva_tx ?? 
+      rawVal.taxe ?? 
+      rawVal.vat_rate ?? 
+      rawVal.tva ?? 
+      rawVal.default_vat_code ?? 
+      rawVal.tx ?? 
+      rawVal.taux_tva ?? 
+      0;
+  }
+
+  const cleaned = String(rawVal).replace('%', '').replace(',', '.').trim();
+  const parsed = parseFloat(cleaned);
+  
+  // Rejeter les valeurs NaN ou négatives, sinon retourner
+  return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed;
+};
+const updateProduct = async (productId, data) => {
+  try {
+    return await apiClient(`/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  } catch (error) {
+    console.error('Erreur mise à jour produit :', error);
+    throw error;
+  }
+};
+/**
  * Exécute une requête DELETE sécurisée sans faire planter l'application en cas d'erreur 404/FK.
  */
 const safeDelete = async (endpoint, log) => {
@@ -150,7 +195,97 @@ export const apiDolibarr = {
   // --- PRODUCTS ---
   getProducts: async () => {
     try {
-      return await apiClient('/products?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+      // Charger les produits
+      const products = await apiClient('/products?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+      
+      if (!Array.isArray(products) || products.length === 0) {
+        return products;
+      }
+
+      // 📌 ENRICHISSEMENT TVA : Charger les factures pour extraire les TVA par produit
+      try {
+        const invoices = await apiClient('/invoices?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+        
+        if (Array.isArray(invoices) && invoices.length > 0) {
+          // Construire une map TVA par réference produit (ou par ID)
+          const taxRateByProductRef = {};
+          const taxRateByProductId = {};
+
+          for (const invoice of invoices) {
+            const invId = invoice.id || invoice.rowid;
+            // Charger les lignes détail de la facture
+            try {
+              const invoiceDetail = await apiClient(`/invoices/${invId}`, { silent: true }).catch(() => null);
+              
+              if (invoiceDetail && Array.isArray(invoiceDetail.lines)) {
+                invoiceDetail.lines.forEach(line => {
+                  // Extraire TVA de la ligne
+                  const lineTax = parseTaxRate(
+                    line.tva_tx ?? 
+                    line.taux ?? 
+                    line.taxe ?? 
+                    line.vat_rate ?? 
+                    line.tva ?? 
+                    line.default_vat_code ??
+                    0
+                  );
+
+                  // Enregistrer par ref produit
+                  if (line.fk_product) {
+                    const prodId = line.fk_product;
+                    if (!taxRateByProductId[prodId] || lineTax > 0) {
+                      taxRateByProductId[prodId] = lineTax;
+                    }
+                  }
+
+                  // Enregistrer aussi par ref produit (si disponible)
+                  if (line.product_ref) {
+                    if (!taxRateByProductRef[line.product_ref] || lineTax > 0) {
+                      taxRateByProductRef[line.product_ref] = lineTax;
+                    }
+                  }
+                });
+              }
+            } catch (err) {
+              // Continue silencieusement si une facture échoue
+              continue;
+            }
+          }
+
+          // Enrichir les produits avec les TVA extraites
+          return products.map(prod => {
+            const prodId = prod.id || prod.rowid;
+            const prodRef = prod.ref;
+
+            // Chercher la TVA dans nos maps
+            let enrichedTax = taxRateByProductId[prodId] || taxRateByProductRef[prodRef] || 0;
+
+            // Si pas trouvée dans les factures, garder celle du produit si elle existe
+            if (enrichedTax === 0) {
+              enrichedTax = parseTaxRate(
+                prod.tva_tx ?? 
+                prod.default_vat_code ?? 
+                prod.taux ?? 
+                prod.taxe ?? 
+                prod.vat_rate ?? 
+                prod.tva ??
+                0
+              );
+            }
+
+            // Retourner le produit enrichi avec tva_tx standardisé
+            return {
+              ...prod,
+              tva_tx: enrichedTax,
+              _tva_from_invoices: enrichedTax > 0 ? true : false // Flag pour debug
+            };
+          });
+        }
+      } catch (err) {
+        console.warn("⚠️ Enrichissement TVA depuis factures échoué, retour des produits bruts :", err);
+      }
+
+      return products;
     } catch (error) {
       console.error("Erreur récupération produits :", error);
       return [];
@@ -160,19 +295,34 @@ export const apiDolibarr = {
   createProduct: async (data) => {
     try {
       const ref = data.ref_produit || data.ref;
+      const resolvedTax = parseTaxRate(data.taxe || data.tva_tx || data.tva || data.taxRate);
 
       if (ref) {
         const existing = await apiClient(`/products?sqlfilters=(t.ref:=:'${ref}')`, { silent: true }).catch(() => []);
         if (Array.isArray(existing) && existing.length > 0) {
-          return existing[0].id || existing[0].rowid;
+          const existingProduct = existing[0];
+          const existingTax = parseTaxRate(
+            existingProduct.tva_tx || existingProduct.default_vat_code || existingProduct.tva || existingProduct.taxe
+          );
+          if (resolvedTax > 0 && existingTax !== resolvedTax) {
+            await updateProduct(existingProduct.id || existingProduct.rowid, {
+              tva_tx: resolvedTax,
+              default_vat_code: `${resolvedTax}`,
+            });
+          }
+          return existingProduct.id || existingProduct.rowid;
         }
       }
+
+      // Récupération exacte de la taxe depuis le CSV
 
       const payload = {
         ref: ref,
         label: data.produit || data.label || '',
         type: 0,
         price: parseFloat(data.pu_hors_Taxe || data.price || 0),
+        tva_tx: resolvedTax,
+        default_vat_code: resolvedTax > 0 ? `${resolvedTax}` : '', // 👈 Ajout pour forcer le code TVA selon l'API Dolibarr
         status: 1,
         status_buy: 1
       };
@@ -228,6 +378,9 @@ export const apiDolibarr = {
       const labelValue = data.produit || data.desc || data.label || "Ligne de facture";
       const subpriceVal = parseFloat(data.pu_hors_Taxe || data.subprice || 0);
 
+      // Récupération exacte de la taxe depuis le CSV
+      const resolvedTax = parseTaxRate(data.taxe || data.tva_tx || data.tva || data.taxRate);
+
       const payload = {
         fk_product: data.fk_product || null,
         desc: labelValue,
@@ -237,7 +390,7 @@ export const apiDolibarr = {
         price: subpriceVal,
         qty: parseInt(data.quantite || data.qty || 1, 10),
         remise_percent: parseFloat(remiseStr) || 0,
-        tva_tx: 0,
+        tva_tx: resolvedTax,
         localtax1_tx: 0,
         localtax2_tx: 0,
         pa_ht: 0,
@@ -258,11 +411,6 @@ export const apiDolibarr = {
         fk_unit: null,
         ref_ext: null
       };
-
-      const taxeStr = String(data.taxe || "0").replace('%', '').replace(',', '.').trim();
-      if (taxeStr && parseFloat(taxeStr) > 0) {
-        payload.tva_tx = parseFloat(taxeStr);
-      }
 
       return await apiClient(`/invoices/${invoiceId}/lines`, {
         method: 'POST',
@@ -286,12 +434,52 @@ export const apiDolibarr = {
     }
   },
 
- // --- PAYMENTS ---
+  // --- PAYMENTS & TREASURY ---
+  
+  getPayments: async () => {
+    try {
+      const payments = await apiClient('/paiements?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+      
+      if (Array.isArray(payments) && payments.length > 0) {
+        return payments;
+      }
+
+      const invoices = await apiClient('/invoices?limit=500', { silent: true }).catch(() => []);
+      let allPayments = [];
+
+      if (Array.isArray(invoices)) {
+        await Promise.all(
+          invoices.map(async (inv) => {
+            const invId = inv.id || inv.rowid;
+            if (invId) {
+              const invPayments = await apiClient(`/invoices/${invId}/payments`, { silent: true }).catch(() => []);
+              if (Array.isArray(invPayments) && invPayments.length > 0) {
+                invPayments.forEach(p => {
+                  allPayments.push({
+                    ...p,
+                    fk_facture: invId,
+                    num_facture: inv.ref_client || inv.ref
+                  });
+                });
+              }
+            }
+          })
+        );
+      }
+      return allPayments;
+    } catch (error) {
+      console.error("Erreur récupération paiements :", error);
+      return [];
+    }
+  },
+
   createPayment: async (data) => {
     try {
-      const caisseName = (data.caisse || 'Caisse').trim();
+      const caisseName = (data.caisse || 'Caisse1').trim();
+      const isCash = caisseName.toLowerCase().includes('caisse') || 
+                     caisseName.toLowerCase().includes('cash') || 
+                     caisseName.toLowerCase().includes('liq');
 
-      // 1. Récupération ou création de la banque / caisse
       const bankAccounts = await apiClient('/bankaccounts?limit=100&sortfield=t.rowid&sortorder=ASC', { silent: true }).catch(() => []);
 
       let matchedAccount = Array.isArray(bankAccounts) ? bankAccounts.find(acc =>
@@ -303,13 +491,12 @@ export const apiDolibarr = {
       if (matchedAccount) {
         accountid = matchedAccount.id || matchedAccount.rowid;
       } else {
-        const isCash = caisseName.toLowerCase().includes('caisse') || caisseName.toLowerCase().includes('cash');
         const newBank = {
           ref: caisseName.toUpperCase().replace(/\s+/g, '_').substring(0, 12),
           label: caisseName,
-          bank: caisseName,
+          bank: isCash ? 'Caisse' : 'Banque',
           country_id: 1,
-          courant: 1,
+          courant: isCash ? 2 : 1,
           clos: 0,
           type: isCash ? 2 : 1,
           currency_code: 'EUR',
@@ -323,14 +510,16 @@ export const apiDolibarr = {
 
       const amountValue = normalizeAmount(data.montant || data.amount);
       if (!amountValue || amountValue <= 0) {
-        throw new Error('Montant de paiement invalide.');
+        throw new Error(`Montant de paiement invalide : ${data.montant}`);
       }
 
       const targetInvoiceId = parseInt(data.invoice_id, 10);
       const paymentTimestamp = dateToUnixTimestamp(data.date_reglement || data.date);
       const numAmount = Number(amountValue.toFixed(2));
 
-      // --- Format strict Dolibarr v23 : Objet avec propriété amount uniquement ---
+      const shouldClose = data.is_last_payment === false ? 'no' : 'yes';
+      const paymentModeId = isCash ? 1 : 4; 
+
       const payloadDistributed = {
         arrayofamounts: {
           [targetInvoiceId]: {
@@ -338,11 +527,11 @@ export const apiDolibarr = {
           }
         },
         datepaye: paymentTimestamp,
-        paymentid: 4, // 4 = Chèque/Virement/CB
-        closepaidinvoices: 'yes',
+        paymentid: paymentModeId,
+        closepaidinvoices: shouldClose,
         accountid: Number(accountid),
         num_payment: caisseName,
-        comment: `Règlement - ${caisseName}`
+        comment: `Règlement CSV - ${caisseName}`
       };
 
       return await apiClient('/invoices/paymentsdistributed', {

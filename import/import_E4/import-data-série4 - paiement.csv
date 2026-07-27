@@ -1,4 +1,4 @@
-ref_detail,date_reglement,caisse,montant
-1,22/07/2006,Banque1,1400
-2,25/07/2026,Caisse1,150
-1,23/07/2006,Banque1,2722
+num_facture,date_reglement,caisse,montant
+F001,22/07/2006,Banque1,1400
+F002,25/07/2026,Caisse1,150
+F001,23/07/2006,Banque1,2722

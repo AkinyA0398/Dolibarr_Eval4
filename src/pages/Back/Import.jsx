@@ -1,6 +1,27 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { parseFactures, parseDetailFactures, parsePaiements } from "../../services/ParserCsv.jsx";
 import { apiDolibarr } from "../../api/apiDolibarr";
+
+// ── 🔧 HELPERS ─────────────────────────────────────────────────────────────
+const formatToStandardDate = (dateStr) => {
+  if (!dateStr) return null;
+  const str = String(dateStr).trim();
+
+  // Format DD/MM/YYYY
+  if (str.includes("/")) {
+    const parts = str.split("/");
+    if (parts.length === 3) {
+      const day = parts[0].padStart(2, '0');
+      const month = parts[1].padStart(2, '0');
+      let year = parts[2];
+      if (year.length === 2) {
+        year = `20${year}`;
+      }
+      return `${year}-${month}-${day}`;
+    }
+  }
+  return str;
+};
 
 const isDateSuspecte = (dateStr) => {
   if (!dateStr) return false;
@@ -8,12 +29,18 @@ const isDateSuspecte = (dateStr) => {
   if (!match) return false;
   const annee = parseInt(match[1], 10);
   const anneeActuelle = new Date().getFullYear();
-
-  const estAnneeHistorique = annee === 2006;
-  const estAnneeRecente = annee >= anneeActuelle - 2 && annee <= anneeActuelle + 1;
-
-  return !(estAnneeHistorique || estAnneeRecente);
+  return !(annee === 2006 || (annee >= anneeActuelle - 2 && annee <= anneeActuelle + 1));
 };
+
+const parseTaxRate = (val) => {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const cleaned = String(val).replace('%', '').replace(',', '.').trim();
+  return parseFloat(cleaned) || 0;
+};
+
+// Nettoyage strict des références
+const cleanRef = (val) => String(val || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
 export default function Import() {
   const [fileFactures, setFileFactures]   = useState(null);
@@ -24,11 +51,20 @@ export default function Import() {
   const [logs, setLogs]                   = useState([]);
   const [statusMessage, setStatusMessage] = useState("");
 
+  const consoleEndRef = useRef(null);
+
   const addLog = (msg) => {
     console.log(msg);
     setLogs((prev) => [...prev, msg]);
     setStatusMessage(msg);
   };
+
+  // Auto-scroll automatique de la console
+  useEffect(() => {
+    if (consoleEndRef.current) {
+      consoleEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   const readFileAsText = (file) =>
     new Promise((resolve, reject) => {
@@ -68,19 +104,22 @@ export default function Import() {
       addLog("📦 Création des produits...");
       const uniqueProducts = [];
       const productMap = {};
+
       details.forEach((d) => {
-        if (!uniqueProducts.find((p) => p.ref_produit === d.ref_produit)) {
+        const refProd = d.ref_produit || d.ref || d.code_produit;
+        if (refProd && !uniqueProducts.find((p) => (p.ref_produit || p.ref || p.code_produit) === refProd)) {
           uniqueProducts.push(d);
         }
       });
 
       for (const prod of uniqueProducts) {
+        const refProd = prod.ref_produit || prod.ref || prod.code_produit;
         try {
           const pId = await apiDolibarr.createProduct(prod);
-          productMap[prod.ref_produit] = pId;
-          addLog(`  ✓ Produit "${prod.ref_produit}" (${prod.produit}) créé → ID ${pId}`);
+          productMap[refProd] = pId;
+          addLog(`  ✓ Produit "${refProd}" (${prod.produit || prod.label || ''}) créé → ID ${pId}`);
         } catch (e) {
-          addLog(`  ⚠️ Produit "${prod.ref_produit}" déjà existant ou erreur : ${e.message}`);
+          addLog(`  ⚠️ Produit "${refProd}" déjà existant ou erreur : ${e.message}`);
         }
       }
 
@@ -88,19 +127,22 @@ export default function Import() {
       addLog("👤 Création des clients...");
       const uniqueClients = [];
       const clientMap = {};
+
       factures.forEach((f) => {
-        if (!uniqueClients.find((c) => c.code_client === f.code_client)) {
+        const codeCli = f.code_client || f.code;
+        if (codeCli && !uniqueClients.find((c) => (c.code_client || c.code) === codeCli)) {
           uniqueClients.push(f);
         }
       });
 
       for (const cli of uniqueClients) {
+        const codeCli = cli.code_client || cli.code;
         try {
           const sId = await apiDolibarr.createThirdparty(cli);
-          clientMap[cli.code_client] = sId;
-          addLog(`  ✓ Client "${cli.nom_client}" (${cli.code_client}) créé → socid ${sId}`);
+          clientMap[codeCli] = sId;
+          addLog(`  ✓ Client "${cli.nom_client || cli.name}" (${codeCli}) créé → socid ${sId}`);
         } catch (e) {
-          addLog(`  ⚠️ Client "${cli.code_client}" déjà existant ou erreur : ${e.message}`);
+          addLog(`  ⚠️ Client "${codeCli}" déjà existant ou erreur : ${e.message}`);
         }
       }
 
@@ -108,59 +150,116 @@ export default function Import() {
       let count = 0;
       for (const fac of factures) {
         count++;
-        addLog(`🧾 Facture ${count}/${factures.length} : ${fac.num_facture} (${fac.nom_client})...`);
+        const numFac = String(fac.num_facture || fac.ref || fac.num || '').trim();
+        const codeCli = fac.code_client || fac.code;
 
-        const socid = clientMap[fac.code_client];
+        addLog(`🧾 Facture ${count}/${factures.length} : ${numFac} (${fac.nom_client || fac.name})...`);
+
+        const socid = clientMap[codeCli];
         if (!socid) {
-          addLog(`  ❌ Client introuvable pour la facture ${fac.num_facture}, ignorée.`);
+          addLog(`  ❌ Client introuvable (${codeCli}) pour la facture ${numFac}, ignorée.`);
           continue;
         }
 
         fac.socid = socid;
         try {
-          const invId = await apiDolibarr.createInvoice(fac);
+          const resInvoice = await apiDolibarr.createInvoice(fac);
+          const invId = typeof resInvoice === 'object' ? (resInvoice.id || resInvoice.rowid) : parseInt(resInvoice, 10);
+
           addLog(`  ✓ Facture créée → ID ${invId}`);
 
-          // Récupère les détails spécifiques à CETTE facture
-          const lignes = details.filter((d) => String(d.num_facture).trim() === String(fac.num_facture).trim());
-          const refDetailsFacture = lignes.map((l) => String(l.ref_detail).trim());
-
-          for (const ligne of lignes) {
-            ligne.fk_product = productMap[ligne.ref_produit];
-            await apiDolibarr.addInvoiceLine(invId, ligne);
-            addLog(`    + Ligne : ${ligne.produit} × ${ligne.quantite} @ ${ligne.pu_hors_Taxe} HT (TVA ${ligne.taxe})`);
-          }
-
-          // Validation de la facture dans Dolibarr
-          await apiDolibarr.validateInvoice(invId);
-          addLog(`  ✓ Facture ${fac.num_facture} validée.`);
-
-          // Association stricte des paiements
-          const paiementsLies = paiements.filter((p) => {
-            const numFacP = String(p.num_facture || '').trim().toUpperCase();
-            const refP    = String(p.ref_detail || '').trim();
-
-            // 1. Si le CSV contient explicitement num_facture (ex: "F001")
-            if (numFacP) {
-              return numFacP === String(fac.num_facture).trim().toUpperCase();
-            }
-
-            // 2. Sinon, association via ref_detail lié aux détails de la facture
-            return refDetailsFacture.includes(refP);
+          // Lignes de détail de la facture
+          const lignes = details.filter((d) => {
+            const dFac = String(d.num_facture || d.ref_facture || d.facnumber || '').trim();
+            return dFac.toUpperCase() === numFac.toUpperCase();
           });
 
-          for (const p of paiementsLies) {
-            p.invoice_id = invId;
+          const refDetailsFacture = lignes.map((l) => String(l.ref_detail || l.ref || l.id).trim().toUpperCase());
 
-            if (isDateSuspecte(p.date_reglement)) {
-              addLog(`    ⚠️ Date historique détectée (${p.date_reglement}) — Enregistrement...`);
+          for (const ligne of lignes) {
+            const refProd = ligne.ref_produit || ligne.ref || ligne.code_produit;
+            ligne.fk_product = productMap[refProd];
+
+            const tvaTx = parseTaxRate(ligne.taxe || ligne.tva_tx || ligne.tva);
+            const remisePct = parseTaxRate(ligne.remise || ligne.remise_percent || 0);
+
+            const ligneNormalisee = {
+              ...ligne,
+              tva_tx: tvaTx,
+              subprice: parseFloat(String(ligne.pu_hors_Taxe || ligne.pu_ht || ligne.subprice || 0).replace(',', '.')),
+              qty: Number(ligne.quantite || ligne.qty || 1),
+              remise_percent: remisePct
+            };
+
+            await apiDolibarr.addInvoiceLine(invId, ligneNormalisee);
+            addLog(`    + Ligne : ${ligne.produit || ligne.label || 'Produit'} × ${ligneNormalisee.qty} @ ${ligneNormalisee.subprice} € HT (TVA ${tvaTx}%, Remise ${remisePct}%)`);
+          }
+
+          // Validation
+          await apiDolibarr.validateInvoice(invId);
+          addLog(`  ✓ Facture ${numFac} validée.`);
+
+          // RECHERCHE STRUCTURÉE ET SÉCURISÉE DES PAIEMENTS
+          const paiementsLies = paiements.filter((p) => {
+            const rawNumP = p.num_facture || p.ref_facture || p.num_fac || p.facnumber || p.facture || p.ref_detail || '';
+            const refP    = String(p.ref_detail || p.ref || p.id_detail || '').trim().toUpperCase();
+
+            const numFacClean = cleanRef(numFac);
+            const numPClean   = cleanRef(rawNumP);
+
+            // Match direct ou suffixe sur la référence de facture
+            if (numPClean && (numPClean === numFacClean || numPClean.endsWith(numFacClean) || numFacClean.endsWith(numPClean))) {
+              return true;
             }
 
-            await apiDolibarr.createPayment(p);
-            addLog(`    💳 Paiement appliqué à ${fac.num_facture} : ${p.montant} € via ${p.caisse} (${p.date_reglement})`);
+            // Match sur la référence de ligne
+            if (refP && refDetailsFacture.includes(refP)) {
+              return true;
+            }
+
+            return false;
+          });
+
+          if (paiementsLies.length === 0) {
+            addLog(`  ⚠️ Aucun paiement correspondant trouvé dans le CSV pour ${numFac}`);
+          } else {
+            addLog(`  💳 Application de ${paiementsLies.length} règlement(s)...`);
+          }
+
+          // Application des règlements
+          for (let idx = 0; idx < paiementsLies.length; idx++) {
+            const p = paiementsLies[idx];
+            const rawDate = p.date_reglement || p.date || p.date_paiement;
+            const formattedDate = formatToStandardDate(rawDate);
+            const rawMontant = p.montant || p.amount || p.valeur || 0;
+            const caisseNom = (p.caisse || p.banque || p.mode || 'Caisse1').trim();
+
+            const isCash = caisseNom.toLowerCase().includes('caisse') ||
+                           caisseNom.toLowerCase().includes('cash') ||
+                           caisseNom.toLowerCase().includes('liq');
+
+            const paiementFormatted = {
+              invoice_id: invId,
+              montant: parseFloat(String(rawMontant).replace(',', '.')),
+              date_reglement: formattedDate,
+              caisse: caisseNom,
+              payment_mode_id: isCash ? 1 : 4, // 1 = LIQ (Espèces), 4 = VIR (Virement)
+              is_last_payment: idx === paiementsLies.length - 1
+            };
+
+            if (isDateSuspecte(rawDate)) {
+              addLog(`    ⚠️ Date historique détectée (${rawDate} → ${formattedDate}) — Enregistrement...`);
+            }
+
+            try {
+              await apiDolibarr.createPayment(paiementFormatted);
+              addLog(`    💳 Paiement appliqué à ${numFac} : ${paiementFormatted.montant} € via ${paiementFormatted.caisse} (${formattedDate})`);
+            } catch (errPay) {
+              addLog(`    ❌ Échec du paiement pour ${numFac} (${paiementFormatted.montant} €) : ${errPay.message || errPay}`);
+            }
           }
         } catch (e) {
-          addLog(`  ❌ Erreur sur la facture ${fac.num_facture} : ${e.message}`);
+          addLog(`  ❌ Erreur sur la facture ${numFac} : ${e.message || e}`);
         }
       }
 
@@ -189,9 +288,8 @@ export default function Import() {
         </p>
 
         <form onSubmit={handleImport} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '600px', margin: '0 auto' }}>
-          {/* Factures */}
           <div style={{ textAlign: 'left' }}>
-            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem', color: 'var(--text-primary, #f1f5f9)' }}>
+            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem' }}>
               📄 Fichier CSV — Factures
             </label>
             <input
@@ -199,18 +297,12 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFileFactures(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid #334155', background: '#fff', cursor: 'pointer' }}
             />
-            {fileFactures && (
-              <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
-                ✓ {fileFactures.name}
-              </span>
-            )}
           </div>
 
-          {/* Détails */}
           <div style={{ textAlign: 'left' }}>
-            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem', color: 'var(--text-primary, #f1f5f9)' }}>
+            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem' }}>
               📄 Fichier CSV — Détails Factures
             </label>
             <input
@@ -218,18 +310,12 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFileDetails(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid #334155', background: '#fff', cursor: 'pointer' }}
             />
-            {fileDetails && (
-              <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
-                ✓ {fileDetails.name}
-              </span>
-            )}
           </div>
 
-          {/* Paiements */}
           <div style={{ textAlign: 'left' }}>
-            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem', color: 'var(--text-primary, #f1f5f9)' }}>
+            <label style={{ display: 'block', fontWeight: '700', marginBottom: '0.4rem' }}>
               📄 Fichier CSV — Paiements
             </label>
             <input
@@ -237,13 +323,8 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFilePaiements(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid #334155', background: '#fff', cursor: 'pointer' }}
             />
-            {filePaiements && (
-              <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
-                ✓ {filePaiements.name}
-              </span>
-            )}
           </div>
 
           <button
@@ -256,15 +337,8 @@ export default function Import() {
           </button>
         </form>
 
-        {/* Console de logs */}
         {(isImporting || logs.length > 0) && (
           <div style={{ textAlign: 'left', marginTop: '2rem' }}>
-            {isImporting && (
-              <div style={{ color: 'var(--primary-color)', fontWeight: '600', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ display: 'inline-block', animation: 'spin 2s linear infinite' }}>⏳</span>
-                Importation en cours...
-              </div>
-            )}
             <div
               id="import-log-console"
               style={{
@@ -276,7 +350,7 @@ export default function Import() {
                 color: '#94a3b8',
                 maxHeight: '320px',
                 overflowY: 'auto',
-                border: '1px solid #ffff',
+                border: '1px solid #334155',
               }}
             >
               {logs.map((line, i) => (
@@ -285,7 +359,7 @@ export default function Import() {
                   style={{
                     paddingBottom: '0.25rem',
                     color:
-                      line.startsWith('  ✓') || line.startsWith('🎉') || line.startsWith('✅')
+                      line.includes('💳 Paiement appliqué') || line.startsWith('  ✓') || line.startsWith('🎉') || line.startsWith('✅')
                         ? '#4ade80'
                         : line.startsWith('  ❌') || line.startsWith('❌')
                         ? '#f87171'
@@ -297,23 +371,20 @@ export default function Import() {
                   {line}
                 </div>
               ))}
-              {isImporting && <span>▌</span>}
+              <div ref={consoleEndRef} />
             </div>
           </div>
         )}
 
-        {/* Message final */}
         {!isImporting && statusMessage && (
           <div
-            className="animate-fade-in"
             style={{
               marginTop: '1.5rem',
               padding: '1.25rem',
               borderRadius: 'var(--radius-md)',
               fontWeight: '600',
-              backgroundColor: isError ? 'var(--danger-bg)' : isSuccess ? 'var(--success-bg)' : 'var(--bg-secondary)',
-              border: `1px solid ${isError ? '#fecdd3' : isSuccess ? '#a7f3d0' : '#334155'}`,
-              color: isError ? 'var(--danger-color)' : isSuccess ? 'var(--success-color)' : 'var(--text-primary)',
+              backgroundColor: isError ? '#fee2e2' : isSuccess ? '#d1fae5' : '#f1f5f9',
+              color: isError ? '#991b1b' : isSuccess ? '#065f46' : '#1e293b',
             }}
           >
             {statusMessage}

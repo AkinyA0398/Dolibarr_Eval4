@@ -13,9 +13,9 @@ const PAYMENT_MODES = [
   { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque" },
 ];
 
-export default function Checkout({ cart, total, user, onBack, onComplete }) {
+export default function Checkout({ cart, total, user, onBack, onComplete, taxe }) {
   const [remisesConfig, setRemisesConfig] = useState([]);
-  
+
   // ── 💳 MODE DE PAIEMENT SÉLECTIONNÉ ───────────────────────────────────────
   const [paymentMode, setPaymentMode] = useState("cash");
 
@@ -143,6 +143,8 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
           fk_product: item.id,
           desc: item.label,
           pu_hors_Taxe: item.price,
+          // pu_Taxe: item.price*taxe,
+          taxe: item.taxe,
           qty: item.qty,
           remise: discountPercent
         };
