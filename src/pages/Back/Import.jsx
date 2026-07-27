@@ -199,7 +199,7 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFileFactures(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #1e293b)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
             />
             {fileFactures && (
               <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
@@ -218,7 +218,7 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFileDetails(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #1e293b)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
             />
             {fileDetails && (
               <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
@@ -237,7 +237,7 @@ export default function Import() {
               accept=".csv"
               disabled={isImporting}
               onChange={(e) => setFilePaiements(e.target.files[0])}
-              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #1e293b)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
+              style={{ width: '100%', padding: '0.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color, #334155)', background: 'var(--bg-secondary, #ffff)', color: 'var(--text-primary, #f1f5f9)', cursor: 'pointer' }}
             />
             {filePaiements && (
               <span style={{ fontSize: '0.8rem', color: '#4ade80', marginTop: '0.25rem', display: 'block' }}>
@@ -276,7 +276,7 @@ export default function Import() {
                 color: '#94a3b8',
                 maxHeight: '320px',
                 overflowY: 'auto',
-                border: '1px solid #1e293b',
+                border: '1px solid #ffff',
               }}
             >
               {logs.map((line, i) => (
