@@ -7,59 +7,62 @@ const formatMontant = (val) => {
 
 const getTodayStr = () => new Date().toISOString().split('T')[0];
 
+const PAYMENT_MODES = [
+  { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse" },
+  { id: "cheque", label: "Chèque", icon: "📝", codeDolibarr: "CHQ", targetAccount: "Banque" },
+  { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque" },
+];
+
 export default function Checkout({ cart, total, user, onBack, onComplete }) {
   const [remisesConfig, setRemisesConfig] = useState([]);
   
+  // ── 💳 MODE DE PAIEMENT SÉLECTIONNÉ ───────────────────────────────────────
+  const [paymentMode, setPaymentMode] = useState("cash");
+
   // ── 📅 INTERVALLES DE DATES CONFIGURABLES ─────────────────────────────────
-  
-  // 1. Intervalle de Facturation (Début - Fin)
   const [invoicePeriod, setInvoicePeriod] = useState({
     start: getTodayStr(),
     end: getTodayStr()
   });
 
-  // Mode de calcul de la limite de règlement
-  const [paymentDateChoice, setPaymentDateChoice] = useState("maintenant"); // 'maintenant', 'custom_days_range', 'custom_range'
+  const [paymentDateChoice, setPaymentDateChoice] = useState("maintenant");
   
-  // 2. Intervalle du Nombre de Jours Accordés (de X jours à Y jours)
   const [customDaysRange, setCustomDaysRange] = useState({
     min: 0,
     max: 7
   });
   
-  // 3. Intervalle Limite de Règlement sur-mesure (Dates précises)
   const [duePeriod, setDuePeriod] = useState({
     start: getTodayStr(),
     end: getTodayStr()
   });
 
-  // 4. Intervalle d'Exécution du Paiement (Étape 2)
   const [paymentPeriod, setPaymentPeriod] = useState({
     start: getTodayStr(),
     end: getTodayStr()
   });
 
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(1); // 1: Choix intervalles, 2: Paiement
+  const [step, setStep] = useState(1); // 1: Choix mode & dates, 2: Exécution
   const [invoiceId, setInvoiceId] = useState(null);
   const [discountPercent, setDiscountPercent] = useState(0);
 
+  // ── 🔄 RECUPERATION DES REMISES SELON LE MODE ─────────────────────────────
   useEffect(() => {
-    fetch('http://localhost:5000/api/remises')
+    fetch(`http://localhost:5000/api/remises?mode=${paymentMode}`)
       .then(res => res.json())
       .then(data => setRemisesConfig(data))
       .catch(err => {
         console.error("Erreur fetching remises", err);
         setRemisesConfig([
-          { max_days: 0, discount_percentage: 30 },
-          { max_days: 7, discount_percentage: 15 },
-          { max_days: 30, discount_percentage: 10 },
+          { max_days: 0, discount_percentage: 0 },
+          { max_days: 7, discount_percentage: 0 },
+          { max_days: 30, discount_percentage: 0 },
           { max_days: 9999, discount_percentage: 0 }
         ]);
       });
-  }, []);
+  }, [paymentMode]);
 
-  // Calcul dynamique de la plage de règlement selon l'option sélectionnée
   const calculateDueRange = () => {
     const startD = new Date(invoicePeriod.start);
     if (isNaN(startD.getTime())) return { start: invoicePeriod.start, end: invoicePeriod.end };
@@ -96,7 +99,6 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
     return 0;
   };
 
-  // Recalcul de la remise selon l'intervalle maximal accordé
   useEffect(() => {
     let daysDiff = 0;
     const invStart = new Date(invoicePeriod.start);
@@ -117,18 +119,20 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
   const discountAmount = total * (discountPercent / 100);
   const finalTotal = total - discountAmount;
 
-  // ── 🧾 CRÉATION FACTURE AVEC INTERVALLES ─────────────────────────────────
+  // ── 🧾 CRÉATION FACTURE ──────────────────────────────────────────────────
   const handleValidateInvoice = async () => {
     setLoading(true);
     try {
       const computedDueRange = calculateDueRange();
+      const activeMode = PAYMENT_MODES.find(m => m.id === paymentMode);
 
       const invData = {
         socid: user.id,
         date: invoicePeriod.start,
         date_fin: invoicePeriod.end,
         date_limite_reglement: computedDueRange.end,
-        note_public: `Période de facturation: du ${invoicePeriod.start} au ${invoicePeriod.end}. Échéance autorisée: du ${computedDueRange.start} au ${computedDueRange.end}`
+        mode_reglement: activeMode?.codeDolibarr || "LIQ",
+        note_public: `Mode de règlement: ${activeMode?.label} (${activeMode?.targetAccount}). Période: du ${invoicePeriod.start} au ${invoicePeriod.end}. Échéance autorisée: du ${computedDueRange.start} au ${computedDueRange.end}`
       };
 
       const createdInvoiceId = await apiDolibarr.createInvoice(invData);
@@ -157,21 +161,29 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
     }
   };
 
-  // ── 💳 ENREGISTREMENT DU PAIEMENT AVEC INTERVALLE ────────────────────────
+  // ── 💳 ENREGISTREMENT DU PAIEMENT (CAISSE VS BANQUE) ─────────────────────
   const handlePayment = async () => {
     setLoading(true);
     try {
+      const activeMode = PAYMENT_MODES.find(m => m.id === paymentMode);
+      
+      // Affectation dynamique du compte de destination selon le mode
+      const targetCaisseOrBank = activeMode?.id === "cash" 
+        ? "Caisse Principale" 
+        : "Compte BDR / Banque";
+
       const paymentData = {
         date: paymentPeriod.start,
         date_fin: paymentPeriod.end,
-        caisse: "Saisie Front",
+        mode_reglement: activeMode?.codeDolibarr || "LIQ",
+        caisse: targetCaisseOrBank,
         montant: finalTotal,
         invoice_id: invoiceId,
-        note: `Paiement exécuté sur la plage du ${paymentPeriod.start} au ${paymentPeriod.end}`
+        note: `Paiement ${activeMode?.label} versé sur [${targetCaisseOrBank}] sur la plage du ${paymentPeriod.start} au ${paymentPeriod.end}`
       };
 
       await apiDolibarr.createPayment(paymentData);
-      alert("Paiement enregistré avec succès !");
+      alert(`Paiement enregistré avec succès vers : ${targetCaisseOrBank}`);
       onComplete();
     } catch (err) {
       console.error(err);
@@ -182,6 +194,7 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
   };
 
   const currentDueRange = calculateDueRange();
+  const selectedPaymentInfo = PAYMENT_MODES.find(m => m.id === paymentMode);
 
   return (
     <div className="container animate-fade-in" style={{ padding: '2rem 1rem', maxWidth: '800px', margin: '0 auto' }}>
@@ -191,15 +204,15 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
 
       <div className="card" style={{ padding: '2rem' }}>
         <h2 style={{ borderBottom: '2px solid var(--border-color)', paddingBottom: '1rem', marginBottom: '1.5rem' }}>
-          {step === 1 ? "Validation & Intervalles de Facturation" : "Saisie Règlement par Intervalle"}
+          {step === 1 ? "Validation, Mode de Paiement & Intervalles" : "Saisie Règlement par Intervalle"}
         </h2>
 
         {/* Récapitulatif */}
-        <div style={{ background: 'var(--surface-color)', padding: '1.5rem', borderRadius: 'var(--radius-sm)', marginBottom: '2rem' }}>
+        <div style={{ background: 'var(--surface-color, #0f172a)', padding: '1.5rem', borderRadius: 'var(--radius-sm, 6px)', marginBottom: '2rem' }}>
           <h3>Récapitulatif</h3>
           <ul style={{ listStyle: 'none', padding: 0 }}>
             {cart.map((item, idx) => (
-              <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color)' }}>
+              <li key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color, #334155)' }}>
                 <span>{item.qty}x {item.label}</span>
                 <span>{formatMontant(item.price * item.qty)}</span>
               </li>
@@ -211,19 +224,57 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
           </div>
           {discountPercent > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981', fontWeight: 'bold' }}>
-              <span>Remise ({discountPercent}%) :</span>
+              <span>Remise appliquée ({discountPercent}%) :</span>
               <span>- {formatMontant(discountAmount)}</span>
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.25rem', marginTop: '0.5rem', borderTop: '2px solid var(--border-color)', paddingTop: '0.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.25rem', marginTop: '0.5rem', borderTop: '2px solid var(--border-color, #334155)', paddingTop: '0.5rem' }}>
             <span>Total à Payer :</span>
-            <span style={{ color: 'var(--primary-color)', fontWeight: '900' }}>{formatMontant(finalTotal)}</span>
+            <span style={{ color: 'var(--primary-color, #3b82f6)', fontWeight: '900' }}>{formatMontant(finalTotal)}</span>
           </div>
         </div>
 
-        {/* Étape 1 : Intervalles de Facturation & Règlement */}
+        {/* Étape 1 : Choix Mode de Paiement & Intervalles */}
         {step === 1 && (
           <div>
+            {/* 💳 Sélecteur de Mode de Paiement */}
+            <div style={{ marginBottom: '2rem' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.75rem' }}>
+                💳 Mode de règlement :
+              </label>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                {PAYMENT_MODES.map((mode) => {
+                  const isActive = paymentMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setPaymentMode(mode.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.75rem 1.25rem',
+                        borderRadius: '6px',
+                        border: isActive ? '2px solid var(--primary-color, #3b82f6)' : '1px solid var(--border-color, #334155)',
+                        background: isActive ? 'var(--primary-color, #3b82f6)' : 'var(--bg-secondary, #1e293b)',
+                        color: '#ffffff',
+                        fontWeight: isActive ? 'bold' : 'normal',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <span>{mode.icon}</span>
+                      <span>{mode.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <small className="text-muted" style={{ display: 'block', marginTop: '0.5rem' }}>
+                Destination du règlement : <strong>{selectedPaymentInfo?.targetAccount}</strong>
+              </small>
+            </div>
+
             <h3>Configuration des Intervalles</h3>
 
             {/* 1. Intervalle de Facturation */}
@@ -276,9 +327,8 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
               </div>
             </div>
 
-            {/* Sub-inputs : Intervalle de Jours (De X jours à Y jours) */}
             {paymentDateChoice === "custom_days_range" && (
-              <div style={{ marginBottom: '1.5rem', paddingLeft: '1rem', borderLeft: '3px solid var(--primary-color)' }}>
+              <div style={{ marginBottom: '1.5rem', paddingLeft: '1rem', borderLeft: '3px solid var(--primary-color, #3b82f6)' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Plage de jours accordés :</label>
                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <div>
@@ -306,9 +356,8 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
               </div>
             )}
 
-            {/* Sub-inputs : Intervalle sur-mesure (Dates) */}
             {paymentDateChoice === "custom_range" && (
-              <div style={{ marginBottom: '1.5rem', paddingLeft: '1rem', borderLeft: '3px solid var(--primary-color)' }}>
+              <div style={{ marginBottom: '1.5rem', paddingLeft: '1rem', borderLeft: '3px solid var(--primary-color, #3b82f6)' }}>
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Plage exacte de règlement :</label>
                 <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                   <input
@@ -329,9 +378,8 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
               </div>
             )}
 
-            {/* Résumé de l'intervalle calculé */}
             <div style={{ padding: '0.75rem', background: '#f1f5f9', color: '#334155', borderRadius: '6px', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-              📌 Intervalle de règlement calculé : Du <strong>{currentDueRange.start}</strong> au <strong>{currentDueRange.end}</strong>
+              📌 Mode : <strong>{selectedPaymentInfo?.label}</strong> (vers {selectedPaymentInfo?.targetAccount}) | Intervalle de règlement : Du <strong>{currentDueRange.start}</strong> au <strong>{currentDueRange.end}</strong>
             </div>
 
             <button className="btn btn-primary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem' }} onClick={handleValidateInvoice} disabled={loading}>
@@ -340,17 +388,19 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
           </div>
         )}
 
-        {/* Étape 2 : Intervalle d'exécution du paiement */}
+        {/* Étape 2 : Exécution de la transaction */}
         {step === 2 && (
           <div>
-            <div style={{ padding: '1.5rem', background: '#ecfdf5', border: '1px solid #10b981', color: '#047857', borderRadius: 'var(--radius-md)', marginBottom: '2rem', textAlign: 'center' }}>
+            <div style={{ padding: '1.5rem', background: '#ecfdf5', border: '1px solid #10b981', color: '#047857', borderRadius: 'var(--radius-md, 6px)', marginBottom: '2rem', textAlign: 'center' }}>
               Facture créée et validée avec succès ! (Réf interne: {invoiceId})
             </div>
 
             <h3>Procéder au Paiement</h3>
-            <p style={{ marginBottom: '1.5rem' }}>Montant dû : <strong>{formatMontant(finalTotal)}</strong></p>
+            <p style={{ marginBottom: '0.5rem' }}>Montant dû : <strong>{formatMontant(finalTotal)}</strong></p>
+            <p style={{ marginBottom: '1.5rem', color: '#64748b' }}>
+              Destination du règlement : <strong>{selectedPaymentInfo?.targetAccount}</strong> ({selectedPaymentInfo?.label})
+            </p>
 
-            {/* Saisie de l'intervalle d'exécution */}
             <div style={{ marginBottom: '1.5rem' }}>
               <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.5rem' }}>
                 📆 Intervalle d'exécution du règlement :
@@ -380,7 +430,7 @@ export default function Checkout({ cart, total, user, onBack, onComplete }) {
             </div>
 
             <button className="btn btn-primary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', background: '#10b981' }} onClick={handlePayment} disabled={loading}>
-              {loading ? "Paiement en cours..." : "Payer Maintenant"}
+              {loading ? "Paiement en cours..." : `Payer (${selectedPaymentInfo?.targetAccount})`}
             </button>
             <button className="btn btn-secondary" style={{ width: '100%', padding: '1rem', fontSize: '1.1rem', marginTop: '1rem' }} onClick={() => onComplete()} disabled={loading}>
               Payer plus tard (Fermer)

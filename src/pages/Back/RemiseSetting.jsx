@@ -2,27 +2,38 @@ import React, { useState, useEffect } from "react";
 
 const API_BASE = "http://localhost:5000/api";
 
+const PAYMENT_MODES = [
+  { id: "cash", label: "Espèces (Cash)", icon: "💵" },
+  { id: "cheque", label: "Chèque", icon: "📝" },
+  { id: "cb", label: "Carte Bancaire", icon: "💳" },
+];
+
 export default function RemiseSettings() {
+  const [selectedMode, setSelectedMode] = useState("cash");
   const [remises, setRemises] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  // Valeurs en cours d'édition, indexées par id — permet de taper sans sauvegarder à chaque frappe
+  // Valeurs en cours d'édition, indexées par id
   const [draftValues, setDraftValues] = useState({});
   // État par ligne : 'saving' | 'saved' | 'error' | undefined
   const [rowStatus, setRowStatus] = useState({});
 
-  const fetchRemises = async () => {
+  const fetchRemises = async (mode) => {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch(`${API_BASE}/remises`);
+      const res = await fetch(`${API_BASE}/remises?mode=${mode}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      
       setRemises(data);
       const initialDrafts = {};
-      data.forEach((r) => { initialDrafts[r.id] = r.discount_percentage; });
+      data.forEach((r) => { 
+        initialDrafts[r.id] = r.discount_percentage; 
+      });
       setDraftValues(initialDrafts);
+      setRowStatus({});
     } catch (err) {
       setLoadError(err.message || "Impossible de charger les paliers de remise.");
     } finally {
@@ -31,11 +42,10 @@ export default function RemiseSettings() {
   };
 
   useEffect(() => {
-    fetchRemises();
-  }, []);
+    fetchRemises(selectedMode);
+  }, [selectedMode]);
 
   const handleChange = (id, value) => {
-    // On autorise la saisie libre, la validation se fait à l'enregistrement
     setDraftValues((prev) => ({ ...prev, [id]: value }));
   };
 
@@ -59,8 +69,12 @@ export default function RemiseSettings() {
       const res = await fetch(`${API_BASE}/remises/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ discount_percentage: numValue }),
+        body: JSON.stringify({ 
+          discount_percentage: numValue,
+          payment_mode: selectedMode 
+        }),
       });
+
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -78,34 +92,61 @@ export default function RemiseSettings() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="container flex items-center justify-center" style={{ minHeight: "40vh" }}>
-        <div className="text-muted" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "1rem", animation: "spin 2s linear infinite" }}>⏳</div>
-          <p style={{ fontWeight: "600", fontSize: "1.25rem" }}>Chargement des paliers de remise...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="animate-fade-in container" style={{ maxWidth: "760px", margin: "0 auto", padding: "2rem 1rem" }}>
       <h2 style={{ fontSize: "2rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <span>⚙️</span> Réglages — Remises par délai
+        <span>⚙️</span> Réglages — Remises par mode de paiement
       </h2>
-      <p className="text-muted" style={{ marginBottom: "2rem", fontSize: "1rem", fontWeight: "500" }}>
-        Définit le pourcentage de remise appliqué selon le délai écoulé depuis la facture.
+      <p className="text-muted" style={{ marginBottom: "1.5rem", fontSize: "1rem", fontWeight: "500" }}>
+        Définit le pourcentage de remise appliqué selon le mode de règlement et le délai écoulé.
       </p>
 
-      {loadError && (
+      {/* ── 💳 SÉLECTEUR DU MODE DE PAIEMENT ──────────────────────────────── */}
+      <div style={{ display: "flex", gap: "0.75rem", marginBottom: "2rem", flexWrap: "wrap" }}>
+        {PAYMENT_MODES.map((mode) => {
+          const isActive = selectedMode === mode.id;
+          return (
+            <button
+              key={mode.id}
+              onClick={() => setSelectedMode(mode.id)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                padding: "0.6rem 1.25rem",
+                borderRadius: "var(--radius-md, 8px)",
+                border: isActive ? "2px solid var(--primary-color, #3b82f6)" : "1px solid var(--border-color, #334155)",
+                background: isActive ? "var(--primary-color, #3b82f6)" : "var(--bg-secondary, #1e293b)",
+                color: "#ffffff",
+                fontWeight: isActive ? "700" : "500",
+                cursor: "pointer",
+                transition: "all 0.2s ease"
+              }}
+            >
+              <span>{mode.icon}</span>
+              <span>{mode.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {loading && (
+        <div className="container flex items-center justify-center" style={{ minHeight: "30vh" }}>
+          <div className="text-muted" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "1rem", animation: "spin 2s linear infinite" }}>⏳</div>
+            <p style={{ fontWeight: "600", fontSize: "1.1rem" }}>Chargement des paliers...</p>
+          </div>
+        </div>
+      )}
+
+      {loadError && !loading && (
         <div
           style={{
             padding: "1rem 1.25rem",
             borderRadius: "var(--radius-md)",
-            backgroundColor: "var(--danger-bg)",
+            backgroundColor: "var(--danger-bg, #451a1a)",
             border: "1px solid #fecdd3",
-            color: "var(--danger-color)",
+            color: "var(--danger-color, #f87171)",
             marginBottom: "1.5rem",
             display: "flex",
             justifyContent: "space-between",
@@ -113,13 +154,13 @@ export default function RemiseSettings() {
           }}
         >
           <span>❌ {loadError}</span>
-          <button className="btn btn-primary" onClick={fetchRemises} style={{ padding: "0.4rem 1rem" }}>
+          <button className="btn btn-primary" onClick={() => fetchRemises(selectedMode)} style={{ padding: "0.4rem 1rem" }}>
             Réessayer
           </button>
         </div>
       )}
 
-      {!loadError && (
+      {!loading && !loadError && (
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
           {remises.map((r) => {
             const status = rowStatus[r.id];
@@ -135,7 +176,7 @@ export default function RemiseSettings() {
                   alignItems: "center",
                   gap: "1.5rem",
                   flexWrap: "wrap",
-                  borderLeft: changed ? "4px solid var(--primary-color)" : "4px solid transparent",
+                  borderLeft: changed ? "4px solid var(--primary-color, #3b82f6)" : "4px solid transparent",
                 }}
               >
                 <div>
@@ -181,13 +222,13 @@ export default function RemiseSettings() {
 
                   <span style={{ minWidth: "90px", fontSize: "0.85rem" }}>
                     {status === "saved" && <span style={{ color: "#4ade80" }}>✓ Enregistré</span>}
-                    {status === "error" && <span style={{ color: "#f87171" }}>⚠️ Valeur invalide (0–100)</span>}
+                    {status === "error" && <span style={{ color: "#f87171" }}>⚠️ Invalide (0–100)</span>}
                   </span>
                 </div>
               </div>
             );
           })}
-          {remises.length === 0 && <p>Aucun palier de remise configuré.</p>}
+          {remises.length === 0 && <p className="text-muted">Aucun palier de remise configuré pour ce mode de paiement.</p>}
         </div>
       )}
     </div>
