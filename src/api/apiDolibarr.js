@@ -558,12 +558,13 @@ export const apiDolibarr = {
         ? Number(normalizedPaymentId)
         : normalizedPaymentId;
 
-      // 🛡️ Format combiné validé : amount global + objet structuré par facture
+      // 🛡️ Structure finale avec multicurrency_amount défini à 0 pour éviter le warning PHP
       const payloadDistributed = {
         amount: numAmount,
         arrayofamounts: {
           [targetInvoiceId]: {
-            amount: numAmount
+            amount: numAmount,
+            multicurrency_amount: 0
           }
         },
         datepaye: paymentTimestamp,

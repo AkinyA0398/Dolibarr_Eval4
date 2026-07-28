@@ -172,23 +172,10 @@ export default function Payment({ user, onBack, onComplete }) {
         note: `Paiement ${activeMode?.label}. Reste dû: ${remainToPay}€ - Remise: ${discountAmount}€ (${discountPercent}%) - Encaissement Réel: ${finalAmount}€`
       };
 
+      // Enregistrement du paiement via l'API distribuée Dolibarr
       await apiDolibarr.createPayment(paymentData);
 
-      try {
-        await apiClient(`/invoices/${selectedInvoiceId}`, {
-          method: 'PUT',
-          body: JSON.stringify({
-            array_options: {
-              options_remise_reglement: discountAmount,
-              options_montant_paye_reel: finalAmount
-            }
-          }),
-          silent: true
-        });
-      } catch (e) {
-        console.warn("Mise à jour optionnelle ignorée :", e);
-      }
-
+      // Si le paiement solde totalement la facture, on met à jour son statut
       if (!isPartialPayment || finalAmount >= remainToPay) {
         await apiDolibarr.setInvoicePaid(selectedInvoiceId).catch(() => {});
       }
