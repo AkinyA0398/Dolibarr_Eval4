@@ -6,7 +6,7 @@ export default function DashboardProductModal({ selectedProductModal, closeModal
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div className="card" style={{ width: '90%', maxWidth: '600px', maxHeight: '80vh', overflowY: 'auto', padding: '1.5rem', background: '#1e293b' }}>
+      <div className="card" style={{ width: '90%', maxWidth: '600px', maxHeight: '80vh', overflowY: 'auto', padding: '1.5rem', background: '#ffff' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ margin: 0 }}>📦 {selectedProductModal.label}</h3>
           <button className="btn btn-secondary" onClick={closeModal}>✕</button>

@@ -33,7 +33,7 @@ export default function FrontAddToCartModal({
     >
       <div
         className="card"
-        style={{ maxWidth: '460px', width: '100%', padding: '1.75rem', background: '#0f172a', borderRadius: '10px', border: '1px solid #334155' }}
+        style={{ maxWidth: '460px', width: '100%', padding: '1.75rem', background: '#ffff', borderRadius: '10px', border: '1px solid #334155' }}
         onClick={(e) => e.stopPropagation()}
       >
         <h3 style={{ marginTop: 0, marginBottom: '0.25rem' }}>🛒 Sélection du produit</h3>
@@ -69,7 +69,7 @@ export default function FrontAddToCartModal({
           </select>
         </div>
 
-        <div style={{ fontSize: '0.85rem', background: '#1e293b', padding: '0.85rem', borderRadius: '6px', marginBottom: '1.25rem' }}>
+        <div style={{ fontSize: '0.85rem', background: '#ffff', padding: '0.85rem', borderRadius: '6px', marginBottom: '1.25rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
             <span className="text-muted">Prix Unitaire HT :</span>
             <strong>{formatMontant(selectedVariant.priceHT)}</strong>
