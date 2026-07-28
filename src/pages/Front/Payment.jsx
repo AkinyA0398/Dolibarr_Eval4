@@ -1,16 +1,23 @@
 import React, { useState, useEffect } from "react";
 import { apiDolibarr } from "../../api/apiDolibarr";
+import { apiClient } from "../../api/apiClient"; // 👈 Import nommé correct avec accolades
 
 const formatMontant = (val) => {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(Number(val) || 0);
 };
 
+const formatDateStr = (dateVal) => {
+  if (!dateVal) return '-';
+  const parsed = new Date(isNaN(dateVal) ? dateVal : Number(dateVal) * 1000);
+  return isNaN(parsed.getTime()) ? '-' : parsed.toLocaleDateString('fr-FR');
+};
+
 const getTodayStr = () => new Date().toISOString().split('T')[0];
 
 const PAYMENT_MODES = [
-  { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse" },
-  { id: "cheque", label: "Chèque", icon: "📝", codeDolibarr: "CHQ", targetAccount: "Banque" },
-  { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque" },
+  { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse", paymentModeId: 4 },
+  { id: "cheque", label: "Chèque", icon: "📝", codeDolibarr: "CHQ", targetAccount: "Banque", paymentModeId: 7 },
+  { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque", paymentModeId: 6 },
 ];
 
 export default function Payment({ user, onBack, onComplete }) {
@@ -44,7 +51,6 @@ export default function Payment({ user, onBack, onComplete }) {
       try {
         const allInvoices = await apiDolibarr.getInvoices();
         
-        // Filtrer les factures non payées (statut != 2 ou paye != 1)
         const unpaidInvoices = (allInvoices || []).filter(inv => {
           const isPaid = String(inv.statut) === '2' || inv.paye === '1' || inv.paye === 1;
           const matchesUser = user?.id ? String(inv.socid || inv.fk_soc) === String(user.id) : true;
@@ -80,9 +86,17 @@ export default function Payment({ user, onBack, onComplete }) {
       });
   }, [paymentMode]);
 
-  // Facture actuellement sélectionnée
   const selectedInvoice = invoices.find(inv => String(inv.id) === String(selectedInvoiceId));
   const rawInvoiceTotal = selectedInvoice ? parseFloat(selectedInvoice.total_ttc || selectedInvoice.total || 0) : 0;
+  
+  // 🛡️ Extraction directe et sécurisée du reste à payer depuis l'objet de la liste Dolibarr
+  const remainToPay = selectedInvoice 
+    ? (selectedInvoice.remaintopay !== undefined 
+        ? parseFloat(selectedInvoice.remaintopay) 
+        : (selectedInvoice.total_ttc !== undefined 
+            ? parseFloat(selectedInvoice.total_ttc) - parseFloat(selectedInvoice.alreadypaid || 0) 
+            : rawInvoiceTotal))
+    : 0;
 
   // Calcul du taux de remise selon l'intervalle de date
   const calculateDiscount = (days) => {
@@ -109,10 +123,21 @@ export default function Payment({ user, onBack, onComplete }) {
     setDiscountPercent(calculateDiscount(daysDiff));
   }, [paymentDateChoice, customDaysRange, duePeriod, invoicePeriod, remisesConfig]);
 
-  // Calculs financiers (Exemple : 1000 € Brut - 300 € Remise = 700 € Réel)
-  const discountAmount = rawInvoiceTotal * (discountPercent / 100);
-  const calculatedPayable = rawInvoiceTotal - discountAmount;
-  const effectivePayAmount = isPartialPayment ? Math.min(customPayAmount, calculatedPayable) : calculatedPayable;
+  // 🛡️ Application de la remise sur le RESTE À PAYER (et non sur le total brut)
+  const discountAmount = remainToPay * (discountPercent / 100);
+  const calculatedPayable = Math.max(0, remainToPay - discountAmount);
+  
+  const effectivePayAmount = isPartialPayment
+    ? Math.max(0, Math.min(customPayAmount, calculatedPayable))
+    : calculatedPayable;
+
+  useEffect(() => {
+    if (!isPartialPayment) {
+      setCustomPayAmount(calculatedPayable);
+    } else if (customPayAmount > calculatedPayable) {
+      setCustomPayAmount(calculatedPayable);
+    }
+  }, [isPartialPayment, calculatedPayable]);
 
   const selectedPaymentInfo = PAYMENT_MODES.find(m => m.id === paymentMode);
 
@@ -123,43 +148,52 @@ export default function Payment({ user, onBack, onComplete }) {
       return;
     }
 
+    // 🛡️ Plafonnement strict par rapport au reste à payer réel pour éviter l'erreur 400
+    const finalAmount = Math.min(effectivePayAmount, remainToPay);
+    if (!finalAmount || finalAmount <= 0) {
+      alert("Veuillez entrer un montant de paiement valide.");
+      return;
+    }
+
     setLoading(true);
     try {
       const activeMode = PAYMENT_MODES.find(m => m.id === paymentMode);
-      const targetCaisseOrBank = activeMode?.id === "cash" ? "Caisse Principale" : "Compte BDR / Banque";
+      const targetCaisseOrBank = activeMode?.id === "cash" ? "Caisse Principale" : "Banque1";
 
-      // Enregistrement du paiement dans Dolibarr
       const paymentData = {
         date: paymentPeriod.start,
         date_fin: paymentPeriod.end,
         mode_reglement: activeMode?.codeDolibarr || "LIQ",
+        payment_mode_id: activeMode?.paymentModeId,
         caisse: targetCaisseOrBank,
-        montant: effectivePayAmount,
+        montant: finalAmount,
         invoice_id: selectedInvoiceId,
-        note: `Paiement ${activeMode?.label}. Brut: ${rawInvoiceTotal}€ - Remise: ${discountAmount}€ (${discountPercent}%) - Encaissement Réel: ${effectivePayAmount}€`
+        is_last_payment: !isPartialPayment || finalAmount >= remainToPay,
+        note: `Paiement ${activeMode?.label}. Reste dû: ${remainToPay}€ - Remise: ${discountAmount}€ (${discountPercent}%) - Encaissement Réel: ${finalAmount}€`
       };
 
       await apiDolibarr.createPayment(paymentData);
 
-      // Stocker les détails de la remise dans la facture (array_options)
-      await apiDolibarr.apiClient(`/invoices/${selectedInvoiceId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          array_options: {
-            options_remise_reglement: discountAmount,
-            options_montant_paye_reel: effectivePayAmount
-          }
-        })
-      }).catch(() => {});
-
-      // Classer la facture comme payée (Statut 2)
-      if (!isPartialPayment || effectivePayAmount >= calculatedPayable) {
-        await apiDolibarr.apiClient(`/invoices/${selectedInvoiceId}/setpaid`, {
-          method: "POST"
-        }).catch(() => {});
+      try {
+        await apiClient(`/invoices/${selectedInvoiceId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            array_options: {
+              options_remise_reglement: discountAmount,
+              options_montant_paye_reel: finalAmount
+            }
+          }),
+          silent: true
+        });
+      } catch (e) {
+        console.warn("Mise à jour optionnelle ignorée :", e);
       }
 
-      alert(`Paiement de ${formatMontant(effectivePayAmount)} enregistré avec succès pour la facture ${selectedInvoice?.ref || selectedInvoiceId} !`);
+      if (!isPartialPayment || finalAmount >= remainToPay) {
+        await apiDolibarr.setInvoicePaid(selectedInvoiceId).catch(() => {});
+      }
+
+      alert(`Paiement de ${formatMontant(finalAmount)} enregistré avec succès pour la facture ${selectedInvoice?.ref || selectedInvoiceId} !`);
       onComplete();
     } catch (err) {
       console.error(err);
@@ -194,16 +228,76 @@ export default function Payment({ user, onBack, onComplete }) {
               onChange={(e) => setSelectedInvoiceId(e.target.value)}
               style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', background: '#0f172a', color: '#fff', border: '1px solid #334155', fontSize: '1rem' }}
             >
-              {invoices.map(inv => (
-                <option key={inv.id} value={inv.id}>
-                  {inv.ref || `FAC-${inv.id}`} — Client: {inv.socname || user?.name || "N/A"} — Montant Brut TTC : {formatMontant(inv.total_ttc || inv.total)}
-                </option>
-              ))}
+              {invoices.map(inv => {
+                const invoiceDate = formatDateStr(inv.date || inv.datef || inv.date_creation || inv.date_delivery || inv.date_reglement);
+                const invRemain = inv.remaintopay !== undefined ? parseFloat(inv.remaintopay) : parseFloat(inv.total_ttc || inv.total || 0);
+                return (
+                  <option key={inv.id} value={inv.id}>
+                    {inv.ref || `FAC-${inv.id}`} — Date : {invoiceDate} — Reste à payer : {formatMontant(invRemain)}
+                  </option>
+                );
+              })}
             </select>
           ) : (
             <div style={{ color: '#f59e0b', fontWeight: 'bold' }}>Aucune facture impayée trouvée pour ce client.</div>
           )}
         </div>
+
+        {selectedInvoice && (
+          <div style={{ marginBottom: '1.5rem', background: '#1e293b', padding: '1.25rem', borderRadius: '8px' }}>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.75rem' }}>🔁 Type de paiement :</label>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setIsPartialPayment(false)}
+                style={{
+                  flex: '1 1 160px',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '6px',
+                  border: isPartialPayment ? '1px solid #334155' : '2px solid #10b981',
+                  background: isPartialPayment ? '#1e293b' : '#10b981',
+                  color: '#fff',
+                  cursor: 'pointer'
+                }}
+              >
+                Paiement Total
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPartialPayment(true)}
+                style={{
+                  flex: '1 1 160px',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '6px',
+                  border: isPartialPayment ? '2px solid #f59e0b' : '1px solid #334155',
+                  background: isPartialPayment ? '#f59e0b' : '#1e293b',
+                  color: '#000',
+                  cursor: 'pointer'
+                }}
+              >
+                Paiement Partiel
+              </button>
+            </div>
+
+            {isPartialPayment && (
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.5rem' }}>Montant à encaisser</label>
+                <input
+                  type="number"
+                  min="0"
+                  max={calculatedPayable}
+                  step="0.01"
+                  value={customPayAmount}
+                  onChange={(e) => setCustomPayAmount(Number(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #334155', background: '#0f172a', color: '#fff', fontSize: '1rem' }}
+                />
+                <p style={{ marginTop: '0.5rem', color: '#94a3b8', fontSize: '0.9rem' }}>
+                  Montant maximum possible après remise : {formatMontant(calculatedPayable)}.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* RECAPITULATIF FINANCIER */}
         {selectedInvoice && (
@@ -211,8 +305,13 @@ export default function Payment({ user, onBack, onComplete }) {
             <h3 style={{ marginTop: 0 }}>Détail du Règlement : {selectedInvoice.ref}</h3>
             
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #334155' }}>
-              <span>Facture Originale (TTC) :</span>
-              <strong style={{ fontSize: '1.1rem' }}>{formatMontant(rawInvoiceTotal)}</strong>
+              <span>Montant Brut Initial (TTC) :</span>
+              <span>{formatMontant(rawInvoiceTotal)}</span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #334155' }}>
+              <span>Reste à Payer Actuel :</span>
+              <strong style={{ fontSize: '1.1rem' }}>{formatMontant(remainToPay)}</strong>
             </div>
 
             {discountPercent > 0 && (
@@ -223,7 +322,7 @@ export default function Payment({ user, onBack, onComplete }) {
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.25rem', marginTop: '0.75rem' }}>
-              <span>Montant Réel à Encaisse :</span>
+              <span>Montant Réel à Encaisser :</span>
               <strong style={{ color: '#3b82f6' }}>{formatMontant(effectivePayAmount)}</strong>
             </div>
           </div>

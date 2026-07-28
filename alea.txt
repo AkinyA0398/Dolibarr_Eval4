@@ -13,7 +13,7 @@
             Valider  
 
 3. Reglement : (Payment.jsx)
-    choisir facture, en totaliter le paiement (possible partielle pour demain)
+    choisir facture, en totaliter le paiement (mettre aussi option Paymentpartiel)
 
 scenario exemple :
     reduce 30% et fact 1000€ ttc, payer :

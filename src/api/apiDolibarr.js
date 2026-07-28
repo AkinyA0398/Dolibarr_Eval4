@@ -36,8 +36,6 @@ const normalizeAmount = (value) => {
 
 /**
  * Fonction utilitaire centralisée pour nettoyer et parser proprement la taxe du CSV.
- * Retourne 0 si la valeur est absente, vide ou invalide, sans forcer de valeur par défaut.
- * Supporte tous les champs Dolibarr possibles : taux, rate, tva_tx, taxe, vat_rate, tva, default_vat_code, tx, taux_tva.
  */
 const parseTaxRate = (val) => {
   if (typeof val === 'number') {
@@ -47,7 +45,6 @@ const parseTaxRate = (val) => {
   if (!val || String(val).trim() === '') return 0;
 
   let rawVal = val;
-  // Si c'est un objet, extraire le premier champ TVA disponible
   if (typeof rawVal === 'object' && rawVal !== null) {
     rawVal = 
       rawVal.taux ?? 
@@ -65,9 +62,9 @@ const parseTaxRate = (val) => {
   const cleaned = String(rawVal).replace('%', '').replace(',', '.').trim();
   const parsed = parseFloat(cleaned);
   
-  // Rejeter les valeurs NaN ou négatives, sinon retourner
   return Number.isNaN(parsed) || parsed < 0 ? 0 : parsed;
 };
+
 const updateProduct = async (productId, data) => {
   try {
     return await apiClient(`/products/${productId}`, {
@@ -79,6 +76,7 @@ const updateProduct = async (productId, data) => {
     throw error;
   }
 };
+
 /**
  * Exécute une requête DELETE sécurisée sans faire planter l'application en cas d'erreur 404/FK.
  */
@@ -99,7 +97,6 @@ const safeDelete = async (endpoint, log) => {
 const unlockAndDeleteInvoice = async (invoiceId, log) => {
   const safeLog = (msg) => { if (typeof log === 'function') log(msg); };
 
-  // 1. Déclasser le paiement (statut "Payée" -> "Validée impayée")
   try {
     await apiClient(`/invoices/${invoiceId}/settounpaid`, { method: 'POST', silent: true });
     safeLog(`    ↳ Facture #${invoiceId} déclassée (settounpaid)`);
@@ -107,7 +104,6 @@ const unlockAndDeleteInvoice = async (invoiceId, log) => {
     // Échec ignoré
   }
 
-  // 2. Remettre en brouillon (settodraft)
   let isDraft = false;
   try {
     await apiClient(`/invoices/${invoiceId}/settodraft`, {
@@ -121,7 +117,6 @@ const unlockAndDeleteInvoice = async (invoiceId, log) => {
     safeLog(`    ⚠️ Échec remise en brouillon Facture #${invoiceId} : ${e.message || e}`);
   }
 
-  // 3. Purger les paiements rattachés
   try {
     const payments = await apiClient(`/invoices/${invoiceId}/payments`, { silent: true }).catch(() => []);
     if (Array.isArray(payments) && payments.length > 0) {
@@ -136,7 +131,6 @@ const unlockAndDeleteInvoice = async (invoiceId, log) => {
     safeLog(`    ⚠️ Erreur suppression paiements #${invoiceId} : ${err.message || err}`);
   }
 
-  // 4. Supprimer les lignes si brouillon
   if (isDraft) {
     try {
       const invoiceDetails = await apiClient(`/invoices/${invoiceId}`, { silent: true }).catch(() => null);
@@ -153,7 +147,6 @@ const unlockAndDeleteInvoice = async (invoiceId, log) => {
     }
   }
 
-  // 5. Suppression finale
   const result = await safeDelete(`/invoices/${invoiceId}`, (msg) => safeLog(`    ⚠️ Facture #${invoiceId} : ${msg}`));
   if (result !== null) {
     safeLog(`    ✓ Facture #${invoiceId} supprimée`);
@@ -195,42 +188,30 @@ export const apiDolibarr = {
   // --- PRODUCTS ---
   getProducts: async () => {
     try {
-      // Charger les produits
       const products = await apiClient('/products?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
       
       if (!Array.isArray(products) || products.length === 0) {
         return products;
       }
 
-      // 📌 ENRICHISSEMENT TVA : Charger les factures pour extraire les TVA par produit
       try {
         const invoices = await apiClient('/invoices?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
         
         if (Array.isArray(invoices) && invoices.length > 0) {
-          // Construire une map TVA par réference produit (ou par ID)
           const taxRateByProductRef = {};
           const taxRateByProductId = {};
 
           for (const invoice of invoices) {
             const invId = invoice.id || invoice.rowid;
-            // Charger les lignes détail de la facture
             try {
               const invoiceDetail = await apiClient(`/invoices/${invId}`, { silent: true }).catch(() => null);
               
               if (invoiceDetail && Array.isArray(invoiceDetail.lines)) {
                 invoiceDetail.lines.forEach(line => {
-                  // Extraire TVA de la ligne
                   const lineTax = parseTaxRate(
-                    line.tva_tx ?? 
-                    line.taux ?? 
-                    line.taxe ?? 
-                    line.vat_rate ?? 
-                    line.tva ?? 
-                    line.default_vat_code ??
-                    0
+                    line.tva_tx ?? line.taux ?? line.taxe ?? line.vat_rate ?? line.tva ?? line.default_vat_code ?? 0
                   );
 
-                  // Enregistrer par ref produit
                   if (line.fk_product) {
                     const prodId = line.fk_product;
                     if (!taxRateByProductId[prodId] || lineTax > 0) {
@@ -238,7 +219,6 @@ export const apiDolibarr = {
                     }
                   }
 
-                  // Enregistrer aussi par ref produit (si disponible)
                   if (line.product_ref) {
                     if (!taxRateByProductRef[line.product_ref] || lineTax > 0) {
                       taxRateByProductRef[line.product_ref] = lineTax;
@@ -247,37 +227,26 @@ export const apiDolibarr = {
                 });
               }
             } catch (err) {
-              // Continue silencieusement si une facture échoue
               continue;
             }
           }
 
-          // Enrichir les produits avec les TVA extraites
           return products.map(prod => {
             const prodId = prod.id || prod.rowid;
             const prodRef = prod.ref;
 
-            // Chercher la TVA dans nos maps
             let enrichedTax = taxRateByProductId[prodId] || taxRateByProductRef[prodRef] || 0;
 
-            // Si pas trouvée dans les factures, garder celle du produit si elle existe
             if (enrichedTax === 0) {
               enrichedTax = parseTaxRate(
-                prod.tva_tx ?? 
-                prod.default_vat_code ?? 
-                prod.taux ?? 
-                prod.taxe ?? 
-                prod.vat_rate ?? 
-                prod.tva ??
-                0
+                prod.tva_tx ?? prod.default_vat_code ?? prod.taux ?? prod.taxe ?? prod.vat_rate ?? prod.tva ?? 0
               );
             }
 
-            // Retourner le produit enrichi avec tva_tx standardisé
             return {
               ...prod,
               tva_tx: enrichedTax,
-              _tva_from_invoices: enrichedTax > 0 ? true : false // Flag pour debug
+              _tva_from_invoices: enrichedTax > 0 ? true : false
             };
           });
         }
@@ -314,15 +283,13 @@ export const apiDolibarr = {
         }
       }
 
-      // Récupération exacte de la taxe depuis le CSV
-
       const payload = {
         ref: ref,
         label: data.produit || data.label || '',
         type: 0,
         price: parseFloat(data.pu_hors_Taxe || data.price || 0),
         tva_tx: resolvedTax,
-        default_vat_code: resolvedTax > 0 ? `${resolvedTax}` : '', // 👈 Ajout pour forcer le code TVA selon l'API Dolibarr
+        default_vat_code: resolvedTax > 0 ? `${resolvedTax}` : '',
         status: 1,
         status_buy: 1
       };
@@ -345,6 +312,39 @@ export const apiDolibarr = {
     } catch (error) {
       console.error("Erreur récupération factures :", error);
       return [];
+    }
+  },
+
+  getInvoice: async (invoiceId) => {
+    try {
+      return await apiClient(`/invoices/${invoiceId}`, { silent: true });
+    } catch (error) {
+      console.error(`Erreur récupération facture #${invoiceId} :`, error);
+      throw error;
+    }
+  },
+
+  updateInvoice: async (invoiceId, data) => {
+    try {
+      return await apiClient(`/invoices/${invoiceId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+    } catch (error) {
+      console.error(`Erreur mise à jour facture #${invoiceId} :`, error);
+      throw error;
+    }
+  },
+
+  setInvoicePaid: async (invoiceId) => {
+    try {
+      return await apiClient(`/invoices/${invoiceId}/classifypaid`, {
+        method: 'POST',
+        body: JSON.stringify({ close_code: 'paid', close_note: 'Soldé automatiquement par application' }),
+      });
+    } catch (error) {
+      console.error(`Erreur passage facture #${invoiceId} à payée :`, error);
+      throw error;
     }
   },
 
@@ -377,8 +377,6 @@ export const apiDolibarr = {
       const remiseStr = String(data.remise || "0").replace('%', '').replace(',', '.').trim();
       const labelValue = data.produit || data.desc || data.label || "Ligne de facture";
       const subpriceVal = parseFloat(data.pu_hors_Taxe || data.subprice || 0);
-
-      // Récupération exacte de la taxe depuis le CSV
       const resolvedTax = parseTaxRate(data.taxe || data.tva_tx || data.tva || data.taxRate);
 
       const payload = {
@@ -482,14 +480,41 @@ export const apiDolibarr = {
 
       const bankAccounts = await apiClient('/bankaccounts?limit=100&sortfield=t.rowid&sortorder=ASC', { silent: true }).catch(() => []);
 
-      let matchedAccount = Array.isArray(bankAccounts) ? bankAccounts.find(acc =>
-        (acc.ref && acc.ref.toLowerCase() === caisseName.toLowerCase()) ||
-        (acc.label && acc.label.toLowerCase() === caisseName.toLowerCase())
-      ) : null;
+      const normalizeKey = (value) => String(value || '').trim().toLowerCase();
+      const targetKey = normalizeKey(caisseName);
 
-      let accountid;
+      const isCashAccount = (acc) => {
+        const bankField = normalizeKey(acc.bank);
+        const label = normalizeKey(acc.label);
+        const type = normalizeKey(acc.type);
+        const courant = String(acc.courant || '').trim();
+        return bankField.includes('caisse') || bankField.includes('cash') || label.includes('caisse') || label.includes('cash') || courant === '2' || type === '2' || type === 'cash' || type === 'caisse';
+      };
+
+      const isBankAccount = (acc) => {
+        const bankField = normalizeKey(acc.bank);
+        const label = normalizeKey(acc.label);
+        const type = normalizeKey(acc.type);
+        const courant = String(acc.courant || '').trim();
+        return bankField.includes('banque') || bankField.includes('bank') || label.includes('banque') || label.includes('bank') || courant === '1' || type === '1' || type === 'banque' || type === 'bank';
+      };
+
+      let matchedAccount = Array.isArray(bankAccounts) ? bankAccounts.find(acc => {
+        const ref = normalizeKey(acc.ref);
+        const label = normalizeKey(acc.label);
+        const wantCash = isCash;
+        const matchByName = ref === targetKey || label === targetKey;
+        const matchByType = wantCash ? isCashAccount(acc) : isBankAccount(acc);
+        return matchByName && matchByType;
+      }) : null;
+
+      if (!matchedAccount && Array.isArray(bankAccounts)) {
+        matchedAccount = bankAccounts.find(acc => (isCash ? isCashAccount(acc) : isBankAccount(acc)));
+      }
+
+      let accountid = null;
       if (matchedAccount) {
-        accountid = matchedAccount.id || matchedAccount.rowid;
+        accountid = matchedAccount.id ?? matchedAccount.rowid ?? matchedAccount.rowid_ref ?? null;
       } else {
         const newBank = {
           ref: caisseName.toUpperCase().replace(/\s+/g, '_').substring(0, 12),
@@ -502,10 +527,16 @@ export const apiDolibarr = {
           currency_code: 'EUR',
           status: 1
         };
-        accountid = await apiClient('/bankaccounts', {
+        const createdBank = await apiClient('/bankaccounts', {
           method: 'POST',
           body: JSON.stringify(newBank),
         });
+        accountid = (createdBank && (createdBank.id ?? createdBank.rowid ?? createdBank)) || null;
+      }
+
+      accountid = Number(accountid);
+      if (!accountid || Number.isNaN(accountid)) {
+        throw new Error('Impossible de déterminer le compte bancaire / caisse pour le règlement.');
       }
 
       const amountValue = normalizeAmount(data.montant || data.amount);
@@ -518,20 +549,29 @@ export const apiDolibarr = {
       const numAmount = Number(amountValue.toFixed(2));
 
       const shouldClose = data.is_last_payment === false ? 'no' : 'yes';
-      const paymentModeId = isCash ? 1 : 4; 
+      const defaultPaymentCode = isCash ? 'LIQ' : 'VIR';
+      const rawPaymentId = data.payment_mode_id ?? data.mode_reglement ?? defaultPaymentCode;
+      const normalizedPaymentId = typeof rawPaymentId === 'string'
+        ? rawPaymentId.trim().toUpperCase()
+        : rawPaymentId;
+      const paymentid = (typeof normalizedPaymentId === 'number' || (typeof normalizedPaymentId === 'string' && /^\d+$/.test(normalizedPaymentId)))
+        ? Number(normalizedPaymentId)
+        : normalizedPaymentId;
 
+      // 🛡️ Format combiné validé : amount global + objet structuré par facture
       const payloadDistributed = {
+        amount: numAmount,
         arrayofamounts: {
           [targetInvoiceId]: {
             amount: numAmount
           }
         },
         datepaye: paymentTimestamp,
-        paymentid: paymentModeId,
+        paymentid: paymentid,
         closepaidinvoices: shouldClose,
         accountid: Number(accountid),
         num_payment: caisseName,
-        comment: `Règlement CSV - ${caisseName}`
+        comment: data.note || `Règlement - ${caisseName}`
       };
 
       return await apiClient('/invoices/paymentsdistributed', {
@@ -552,117 +592,4 @@ export const apiDolibarr = {
       return [];
     }
   },
-
-  // --- PURGE COMPLÈTE ---
-  resetAllData: async (onStep) => {
-    const log = (msg) => {
-      console.log(msg);
-      if (typeof onStep === 'function') onStep(msg);
-    };
-
-    const getId = (record) => record?.rowid || record?.id || null;
-    const getInvoiceRef = (invoice) => invoice?.ref_client || invoice?.ref || invoice?.facnumber || '';
-
-    const isTargetInvoice = (invoice) => {
-      const ref = String(getInvoiceRef(invoice) || '').trim();
-      const facnumber = String(invoice?.facnumber || '').trim();
-      return /^F\d+/i.test(ref) || /^IN/i.test(facnumber) || /^IN/i.test(ref);
-    };
-
-    const isTargetProduct = (product) => {
-      const ref = String(product?.ref || '').trim();
-      return /^P\d+/i.test(ref) || ref !== '';
-    };
-
-    const blockedPayments = new Set();
-    const blockedInvoices = new Set();
-    const blockedProducts = new Set();
-    const blockedThirdparties = new Set();
-
-    try {
-      log('🚀 Lancement de la purge globale...');
-
-      for (let pass = 1; pass <= 2; pass++) {
-        const isSecondPass = pass === 2;
-        log(`\n--- Passe N°${pass} ${isSecondPass ? '(Consolidation)' : ': Nettoyage initial'} ---`);
-
-        const [factures, products, thirdparties] = await Promise.all([
-          apiClient('/invoices?limit=500&sortfield=t.rowid&sortorder=ASC', { silent: true }).catch(() => []),
-          apiClient('/products?limit=500&sortfield=t.rowid&sortorder=ASC', { silent: true }).catch(() => []),
-          apiClient('/thirdparties?limit=500&sortfield=t.rowid&sortorder=ASC', { silent: true }).catch(() => []),
-        ]);
-
-        const targetInvoices = (factures || []).filter(isTargetInvoice);
-        const targetProducts = (products || []).filter(isTargetProduct);
-        const thirdpartyIds = new Set((thirdparties || []).map(getId).filter(Boolean));
-
-        if (targetInvoices.length > 0) {
-          log(`🔎 Traitement de ${targetInvoices.length} facture(s)...`);
-          for (const f of targetInvoices) {
-            const id = getId(f);
-            if (!id || (isSecondPass && blockedInvoices.has(id))) continue;
-
-            log(`  ├─ Nettoyage Facture ${getInvoiceRef(f)} (#${id})`);
-            const success = await unlockAndDeleteInvoice(id, log);
-            if (!success) blockedInvoices.add(id);
-          }
-        }
-
-        const orphanPayments = await apiClient('/paiements?limit=500', { silent: true }).catch(() => []);
-        if (Array.isArray(orphanPayments) && orphanPayments.length > 0) {
-          log(`🔎 Nettoyage de ${orphanPayments.length} paiement(s)...`);
-          await Promise.all(
-            orphanPayments.map(async (pay) => {
-              const payId = getId(pay);
-              if (!payId || (isSecondPass && blockedPayments.has(payId))) return;
-
-              const res = await safeDelete(`/paiements/${payId}`, (msg) => log(`    ├─ ${msg}`));
-              if (res === null) blockedPayments.add(payId);
-            })
-          );
-        }
-
-        if (targetProducts.length > 0) {
-          log(`🔎 Traitement de ${targetProducts.length} produit(s)...`);
-          await Promise.all(
-            targetProducts.map(async (p) => {
-              const id = getId(p);
-              if (!id || (isSecondPass && blockedProducts.has(id))) return;
-
-              const res = await safeDelete(`/products/${id}`, (msg) => log(`    ├─ Produit ${p?.ref || id} : ${msg}`));
-              if (res === null) blockedProducts.add(id);
-            })
-          );
-        }
-
-        if (thirdpartyIds.size > 0) {
-          log(`🔎 Traitement de ${thirdpartyIds.size} client(s)...`);
-          await Promise.all(
-            Array.from(thirdpartyIds).map(async (socid) => {
-              if (isSecondPass && blockedThirdparties.has(socid)) return;
-
-              const res = await safeDelete(`/thirdparties/${socid}`, (msg) => log(`    ├─ Client #${socid} : ${msg}`));
-              if (res === null) blockedThirdparties.add(socid);
-            })
-          );
-        }
-
-        if (pass === 1 && blockedPayments.size === 0 && blockedInvoices.size === 0 && blockedProducts.size === 0) {
-          break;
-        }
-      }
-
-      let generatedSqlScript = null;
-
-      return {
-        success: blockedPayments.size === 0 && blockedInvoices.size === 0 && blockedProducts.size === 0,
-        sqlScript: generatedSqlScript
-      };
-    } catch (error) {
-      console.error('Erreur pendant la réinitialisation :', error);
-      throw new Error(error.message || 'Échec de réinitialisation.');
-    }
-  }
 };
-
-export default apiDolibarr;

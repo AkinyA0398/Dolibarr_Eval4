@@ -8,9 +8,9 @@ const formatMontant = (val) => {
 const getTodayStr = () => new Date().toISOString().split('T')[0];
 
 const PAYMENT_MODES = [
-  { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse" },
-  { id: "cheque", label: "Chèque", icon: "📝", codeDolibarr: "CHQ", targetAccount: "Banque" },
-  { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque" },
+  { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse", paymentModeId: 4 },
+  { id: "cheque", label: "Chèque", icon: "📝", codeDolibarr: "CHQ", targetAccount: "Banque", paymentModeId: 7 },
+  { id: "cb", label: "Carte Bancaire", icon: "💳", codeDolibarr: "CB", targetAccount: "Banque", paymentModeId: 6 },
 ];
 
 export default function Checkout({ cart, total, user, onBack, onComplete, taxe }) {
@@ -172,12 +172,13 @@ export default function Checkout({ cart, total, user, onBack, onComplete, taxe }
       // Affectation dynamique du compte de destination selon le mode
       const targetCaisseOrBank = activeMode?.id === "cash" 
         ? "Caisse Principale" 
-        : "Compte BDR / Banque";
+        : "Banque1";
 
       const paymentData = {
         date: paymentPeriod.start,
         date_fin: paymentPeriod.end,
         mode_reglement: activeMode?.codeDolibarr || "LIQ",
+        payment_mode_id: activeMode?.paymentModeId,
         caisse: targetCaisseOrBank,
         montant: finalTotal,
         invoice_id: invoiceId,

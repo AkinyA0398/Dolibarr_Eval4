@@ -243,7 +243,7 @@ export default function Import() {
               montant: parseFloat(String(rawMontant).replace(',', '.')),
               date_reglement: formattedDate,
               caisse: caisseNom,
-              payment_mode_id: isCash ? 1 : 4, // 1 = LIQ (Espèces), 4 = VIR (Virement)
+              payment_mode_id: isCash ? 4 : 2, // 4 = LIQ (Espèces), 2 = VIR (Virement)
               is_last_payment: idx === paiementsLies.length - 1
             };
 
