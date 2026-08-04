@@ -17,25 +17,28 @@ export default function DashboardProductModal({ selectedProductModal, closeModal
         <p><strong>Total Quantités Vendues :</strong> {selectedProductModal.totalQty}</p>
         <p><strong>CA Total Généré :</strong> {formatMontant(selectedProductModal.totalSalesTTC)} TTC</p>
 
-        <h4 style={{ marginTop: '1rem', borderBottom: '1px solid #334155', paddingBottom: '0.25rem' }}>Factures associées</h4>
-        <table style={{ width: '100%', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+        <h4 style={{ marginTop: '1rem', borderBottom: '1px solid #e8dcc8', paddingBottom: '0.5rem', color: '#2c2c2c' }}>Factures associées</h4>
+        <table style={{ width: '100%', fontSize: '0.85rem', marginTop: '0.5rem', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid #334155' }}>
-              <th>Réf Facture</th>
-              <th>Client</th>
-              <th>Qté</th>
-              <th style={{ textAlign: 'right' }}>Total TTC</th>
+            <tr style={{ background: '#e8dcc8', textAlign: 'left', borderBottom: '2px solid #d9cfc0', color: '#2c2c2c' }}>
+              <th style={{ padding: '0.6rem 0.8rem', fontWeight: '600' }}>Réf Facture</th>
+              <th style={{ padding: '0.6rem 0.8rem', fontWeight: '600' }}>Client</th>
+              <th style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'center' }}>Qté</th>
+              <th style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right' }}>Total TTC</th>
             </tr>
           </thead>
           <tbody>
-            {selectedProductModal.invoices.map((inv, idx) => (
-              <tr key={idx}>
-                <td style={{ color: 'var(--primary-color)' }}>{inv.invoiceRef}</td>
-                <td>{inv.client}</td>
-                <td>{inv.qty}</td>
-                <td style={{ textAlign: 'right', fontWeight: 'bold' }}>{formatMontant(inv.lineTotalTTC)}</td>
-              </tr>
-            ))}
+            {selectedProductModal.invoices.map((inv, idx) => {
+              const isEvenRow = idx % 2 === 0;
+              return (
+                <tr key={idx} style={{ background: isEvenRow ? '#faf8f4' : '#f5f1e8', borderBottom: '1px solid #e8dcc8', color: '#2c2c2c' }}>
+                  <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', color: '#2c5aa0' }}>{inv.invoiceRef}</td>
+                  <td style={{ padding: '0.6rem 0.8rem' }}>{inv.client}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'center' }}>{inv.qty}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'right', fontWeight: '600' }}>{formatMontant(inv.lineTotalTTC)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

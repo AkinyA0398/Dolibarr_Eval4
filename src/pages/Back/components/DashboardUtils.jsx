@@ -63,6 +63,12 @@ export const getPaymentInfo = (code) => {
   };
 };
 
+export const parseInvoiceSurplus = (inv) => {
+  const note = String(inv.note_public || inv.note || '');
+  const match = note.match(/\[SURPLUS_APP:([0-9]+(?:[.,][0-9]+)?)\]/i);
+  return match ? parseFloat(match[1].replace(',', '.')) || 0 : 0;
+};
+
 export const parseInvoiceIntervals = (inv) => {
   const note = inv.note_public || inv.note || '';
 
@@ -138,7 +144,19 @@ export const extractInvoiceAmounts = (inv, paymentsMap = {}) => {
     payeTTC = totalTTC;
   }
 
-  const restantTTC = Math.max(0, totalTTC - payeTTC);
+  const noteSurplusTTC = parseInvoiceSurplus(inv);
+  
+  // Prise en compte du Cashback (totalRemiseMontant) et du Payé (payeTTC) :
+  // - Effective Settled = Payé + Cashback
+  // - Restant = max(0, totalTTC - Effective Settled)
+  // - Surplus / Dépassement = max(noteSurplusTTC, (Payé + Cashback) - totalTTC, Payé - totalTTC, 0)
+  const effectiveSettled = payeTTC + totalRemiseMontant;
+  const restantTTC = Math.max(0, totalTTC - effectiveSettled);
+  const calculatedSurplus = Math.max(
+    effectiveSettled > totalTTC ? (effectiveSettled - totalTTC) : 0,
+    payeTTC > totalTTC ? (payeTTC - totalTTC) : 0
+  );
+  const surplusTTC = Math.max(noteSurplusTTC, calculatedSurplus);
 
   let caissePaid = 0;
   let banquePaid = 0;
@@ -173,6 +191,7 @@ export const extractInvoiceAmounts = (inv, paymentsMap = {}) => {
     totalHT,
     payeTTC,
     restantTTC,
+    surplusTTC,
     caissePaid,
     banquePaid,
     totalRemiseMontant,

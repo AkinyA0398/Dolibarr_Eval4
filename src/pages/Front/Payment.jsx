@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiDolibarr } from "../../api/apiDolibarr";
-import { apiClient } from "../../api/apiClient"; // 👈 Import nommé correct avec accolades
+import { apiClient } from "../../api/apiClient"; 
 
 const formatMontant = (val) => {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(Number(val) || 0);
@@ -12,7 +12,19 @@ const formatDateStr = (dateVal) => {
   return isNaN(parsed.getTime()) ? '-' : parsed.toLocaleDateString('fr-FR');
 };
 
+const getInvoiceTimestamp = (inv) =>
+  Number(inv.date || inv.datef || inv.date_creation || inv.date_validation || inv.date_modification || 0) || 0;
+
 const getTodayStr = () => new Date().toISOString().split('T')[0];
+
+const SURPLUS_TAG = 'SURPLUS_APP';
+const buildSurplusTag = (amount) => `[${SURPLUS_TAG}:${Number(amount).toFixed(2)}]`;
+const parseSurplusFromNote = (note) => {
+  if (!note) return 0;
+  const match = String(note).match(/\[SURPLUS_APP:([0-9]+(?:[.,][0-9]+)?)\]/i);
+  return match ? parseFloat(match[1].replace(',', '.')) || 0 : 0;
+};
+const removeSurplusTags = (note) => String(note || '').replace(/\[SURPLUS_APP:[^\]]+\]/gi, '').trim();
 
 const PAYMENT_MODES = [
   { id: "cash", label: "Espèces (Cash)", icon: "💵", codeDolibarr: "LIQ", targetAccount: "Caisse", paymentModeId: 4 },
@@ -52,10 +64,13 @@ export default function Payment({ user, onBack, onComplete }) {
         const allInvoices = await apiDolibarr.getInvoices();
         
         const unpaidInvoices = (allInvoices || []).filter(inv => {
+          const amount = parseFloat(inv.total_ttc || inv.total || 0) || 0;
           const isPaid = String(inv.statut) === '2' || inv.paye === '1' || inv.paye === 1;
-          const matchesUser = user?.id ? String(inv.socid || inv.fk_soc) === String(user.id) : true;
-          return !isPaid && matchesUser;
+          const isDraft = String(inv.statut) === '0' || String(inv.status) === '0';
+          return !isPaid && amount > 0 && !isDraft;
         });
+
+        unpaidInvoices.sort((a, b) => getInvoiceTimestamp(b) - getInvoiceTimestamp(a));
 
         setInvoices(unpaidInvoices);
         if (unpaidInvoices.length > 0) {
@@ -127,14 +142,12 @@ export default function Payment({ user, onBack, onComplete }) {
   const discountAmount = remainToPay * (discountPercent / 100);
   const calculatedPayable = Math.max(0, remainToPay - discountAmount);
   
-  const effectivePayAmount = isPartialPayment
-    ? Math.max(0, Math.min(customPayAmount, calculatedPayable))
-    : calculatedPayable;
+  const effectivePayAmount = Math.max(0, customPayAmount);
+  const clampedPayAmount = Math.min(effectivePayAmount, remainToPay);
+  const surplusAmount = Math.max(0, effectivePayAmount - remainToPay);
 
   useEffect(() => {
     if (!isPartialPayment) {
-      setCustomPayAmount(calculatedPayable);
-    } else if (customPayAmount > calculatedPayable) {
       setCustomPayAmount(calculatedPayable);
     }
   }, [isPartialPayment, calculatedPayable]);
@@ -148,8 +161,8 @@ export default function Payment({ user, onBack, onComplete }) {
       return;
     }
 
-    // 🛡️ Plafonnement strict par rapport au reste à payer réel pour éviter l'erreur 400
-    const finalAmount = Math.min(effectivePayAmount, remainToPay);
+    // 🛡️ Enregistrement du montant réel saisi par l'utilisateur (y compris tout dépassement/surplus)
+    const finalAmount = effectivePayAmount;
     if (!finalAmount || finalAmount <= 0) {
       alert("Veuillez entrer un montant de paiement valide.");
       return;
@@ -168,12 +181,21 @@ export default function Payment({ user, onBack, onComplete }) {
         caisse: targetCaisseOrBank,
         montant: finalAmount,
         invoice_id: selectedInvoiceId,
-        is_last_payment: !isPartialPayment || finalAmount >= remainToPay,
-        note: `Paiement ${activeMode?.label}. Reste dû: ${remainToPay}€ - Remise: ${discountAmount}€ (${discountPercent}%) - Encaissement Réel: ${finalAmount}€`
+        is_last_payment: finalAmount >= remainToPay,
+        note: `Paiement ${activeMode?.label}. Reste dû: ${formatMontant(Math.max(0, remainToPay - finalAmount))} - Remise: ${formatMontant(discountAmount)} (${discountPercent}%) - Montant saisi: ${formatMontant(effectivePayAmount)} - Encaissement réel: ${formatMontant(finalAmount)}${surplusAmount > 0 ? ' - Surplus enregistré: ' + formatMontant(surplusAmount) : ''}`
       };
 
       // Enregistrement du paiement via l'API distribuée Dolibarr (gère la clôture automatiquement)
       await apiDolibarr.createPayment(paymentData);
+
+      if (surplusAmount > 0 && selectedInvoice) {
+        const existingNote = String(selectedInvoice.note_public || selectedInvoice.note || '').trim();
+        const previousSurplus = parseSurplusFromNote(existingNote);
+        const totalSurplus = previousSurplus + surplusAmount;
+        const cleanedNote = removeSurplusTags(existingNote);
+        const noteSuffix = `${cleanedNote ? cleanedNote + ' ' : ''}Surplus enregistré: ${formatMontant(totalSurplus)} ${buildSurplusTag(totalSurplus)}`;
+        await apiDolibarr.updateInvoice(selectedInvoiceId, { note_public: noteSuffix });
+      }
 
       alert(`Paiement de ${formatMontant(finalAmount)} enregistré avec succès pour la facture ${selectedInvoice?.ref || selectedInvoiceId} !`);
       onComplete();
@@ -197,7 +219,7 @@ export default function Payment({ user, onBack, onComplete }) {
         </h2>
 
         {/* 1. SECTEUR CHOIX DE LA FACTURE */}
-        <div style={{ marginBottom: '1.5rem', background: '#1e293b', padding: '1.25rem', borderRadius: '8px' }}>
+        <div style={{ marginBottom: '1.5rem', background: '#ffff', padding: '1.25rem', borderRadius: '8px' }}>
           <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.5rem', fontSize: '1rem' }}>
             📄 Choisir la Facture à Régler :
           </label>
@@ -226,7 +248,7 @@ export default function Payment({ user, onBack, onComplete }) {
         </div>
 
         {selectedInvoice && (
-          <div style={{ marginBottom: '1.5rem', background: '#1e293b', padding: '1.25rem', borderRadius: '8px' }}>
+          <div style={{ marginBottom: '1.5rem', background: '#ffff', padding: '1.25rem', borderRadius: '8px' }}>
             <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.75rem' }}>🔁 Type de paiement :</label>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               <button
@@ -242,7 +264,7 @@ export default function Payment({ user, onBack, onComplete }) {
                   cursor: 'pointer'
                 }}
               >
-                Paiement Total
+                Paiement unique
               </button>
               <button
                 type="button"
@@ -257,33 +279,39 @@ export default function Payment({ user, onBack, onComplete }) {
                   cursor: 'pointer'
                 }}
               >
-                Paiement Partiel
+                Paiement échelonné
               </button>
             </div>
 
-            {isPartialPayment && (
-              <div style={{ marginTop: '1rem' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.5rem' }}>Montant à encaisser</label>
-                <input
-                  type="number"
-                  min="0"
-                  max={calculatedPayable}
-                  step="0.01"
-                  value={customPayAmount}
-                  onChange={(e) => setCustomPayAmount(Number(e.target.value) || 0)}
-                  style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #334155', background: '#0f172a', color: '#fff', fontSize: '1rem' }}
-                />
-                <p style={{ marginTop: '0.5rem', color: '#94a3b8', fontSize: '0.9rem' }}>
-                  Montant maximum possible après remise : {formatMontant(calculatedPayable)}.
-                </p>
-              </div>
-            )}
+            <div style={{ marginTop: '1rem' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', marginBottom: '0.5rem' }}>Montant à encaisser maintenant</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={customPayAmount}
+                onChange={(e) => {
+                  const nextAmount = Number(e.target.value) || 0;
+                  setCustomPayAmount(nextAmount);
+                }}
+                style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid #334155', background: '#0f172a', color: '#fff', fontSize: '1rem' }}
+              />
+              <p style={{ marginTop: '0.5rem', color: '#94a3b8', fontSize: '0.9rem' }}>
+                Montant recommandé après remise : {formatMontant(calculatedPayable)}. En mode échelonné, vous pouvez effectuer plusieurs paiements successifs.
+              </p>
+
+              {effectivePayAmount > remainToPay && (
+                <div style={{ marginTop: '0.75rem', color: '#fbbf24', fontSize: '0.9rem', fontWeight: '600' }}>
+                  ⚠️ Le montant saisi dépasse le reste dû. Seul le montant restant ({formatMontant(remainToPay)}) sera enregistré.
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* RECAPITULATIF FINANCIER */}
         {selectedInvoice && (
-          <div style={{ background: '#0f172a', padding: '1.5rem', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #334155' }}>
+          <div style={{ background: '#ffff', padding: '1.5rem', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #334155' }}>
             <h3 style={{ marginTop: 0 }}>Détail du Règlement : {selectedInvoice.ref}</h3>
             
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid #334155' }}>
@@ -307,6 +335,13 @@ export default function Payment({ user, onBack, onComplete }) {
               <span>Montant Réel à Encaisser :</span>
               <strong style={{ color: '#3b82f6' }}>{formatMontant(effectivePayAmount)}</strong>
             </div>
+
+            {surplusAmount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1rem', marginTop: '0.5rem', color: '#f59e0b' }}>
+                <span>Excédent enregistré :</span>
+                <strong>{formatMontant(surplusAmount)}</strong>
+              </div>
+            )}
           </div>
         )}
 

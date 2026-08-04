@@ -80,11 +80,15 @@ export default function DashboardFilters({
           </div>
           <div style={{ borderLeft: '2px solid #f59e0b', paddingLeft: '0.75rem' }}>
             <span className="text-muted" style={{ display: 'block', fontSize: '0.8rem' }}>🎁 Remise Réglement</span>
-            <strong style={{ color: '#f59e0b', fontSize: '1.1rem' }}>{formatMontant(globalKpis.totalTTC - (globalKpis.totalCaisse + globalKpis.totalBanque))}</strong>
+            <strong style={{ color: '#f59e0b', fontSize: '1.1rem' }}>{formatMontant(globalKpis.totalRemisesMontant)}</strong>
           </div>
           <div style={{ borderLeft: '2px solid #f43f5e', paddingLeft: '0.75rem' }}>
             <span className="text-muted" style={{ display: 'block', fontSize: '0.8rem' }}>Reste à Payer</span>
             <strong style={{ color: '#f43f5e', fontSize: '1.1rem' }}>{formatMontant(globalKpis.restantTTC)}</strong>
+          </div>
+          <div style={{ borderLeft: '2px solid #7c3aed', paddingLeft: '0.75rem' }}>
+            <span className="text-muted" style={{ display: 'block', fontSize: '0.8rem' }}>Excédent / Surplus</span>
+            <strong style={{ color: '#7c3aed', fontSize: '1.1rem' }}>{formatMontant(globalKpis.surplusTTC || 0)}</strong>
           </div>
         </div>
       </div>

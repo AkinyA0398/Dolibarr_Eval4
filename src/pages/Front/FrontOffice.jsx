@@ -5,6 +5,7 @@ import Payment from "./Payment.jsx";
 import { formatMontant, getProductPriceVariants } from "./components/FrontOfficeUtils.jsx";
 import FrontProductCard from "./components/FrontProductCard.jsx";
 import FrontAddToCartModal from "./components/FrontAddToCartModal.jsx";
+import GenererPayment from "./GenererPayment.jsx";
 
 const API_BASE = "http://localhost:5000/api";
 
@@ -18,6 +19,7 @@ export default function FrontOffice() {
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [payment, setPayment] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [generation, setGeneration] = useState(false);
 
   // ── 🏷️ ÉTATS POUR LES REMISES PAR JOURS & MODE DE PAIEMENT ────────────────
   const [paymentMode, setPaymentMode] = useState("cash"); // 'cash', 'cheque', 'cb'
@@ -252,6 +254,23 @@ export default function FrontOffice() {
     );
   }
 
+  if (generation) {
+    return (
+      <GenererPayment
+        cart={cart}
+        total={cartTotal}
+        user={currentUser}
+        paymentMode={paymentMode}
+        delayDays={delayDays}
+        onBack={() => setGeneration(false)}
+        onComplete={() => {
+          setCart([]);
+          setGeneration(false);
+        }}
+      />
+    );
+  }
+
   if (!isLogged) {
     return (
       <div className="container animate-fade-in" style={{ maxWidth: "400px", marginTop: "100px" }}>
@@ -290,6 +309,9 @@ export default function FrontOffice() {
           </button>
           <button className="btn btn-primary" onClick={() => setPayment(true)}>
             Paiement
+          </button>
+          <button className="btn btn-primary" onClick={() => setGeneration(true)}>
+            Génerer Paiement
           </button>
           <button className="btn btn-secondary" onClick={() => setIsLogged(false)}>
             Déconnexion

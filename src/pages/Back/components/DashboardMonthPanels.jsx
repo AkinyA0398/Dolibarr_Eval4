@@ -1,7 +1,7 @@
 import React from 'react';
-import { formatMontant, mapTargetTreasury } from './DashboardUtils.jsx';
+import { formatMontant } from './DashboardUtils.jsx';
 
-export default function DashboardMonthPanels({ invoicesByMonth, selectedMonth, setSelectedMonth, setSelectedInvoiceModal }) {
+export default function DashboardMonthPanels({ invoicesByMonth, selectedMonth, setSelectedMonth, setSelectedInvoiceModal, remboursementsMap = {}, onRembourser }) {
   const monthKeys = Object.keys(invoicesByMonth).sort().reverse();
 
   if (monthKeys.length === 0) {
@@ -17,64 +17,138 @@ export default function DashboardMonthPanels({ invoicesByMonth, selectedMonth, s
           const isSelected = selectedMonth === monthKey;
 
           return (
-            <div key={monthKey} className="card" style={{ padding: '1.25rem' }}>
+            <div key={monthKey} style={{ padding: '1.25rem', background: '#f5f1e8', borderRadius: '6px', border: '1px solid #e8dcc8' }}>
               <div
                 style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer', alignItems: 'center' }}
                 onClick={() => setSelectedMonth(isSelected ? null : monthKey)}
               >
-                <h4 style={{ margin: 0 }}>{monthKey} ({data.factures.length} factures)</h4>
+                <h4 style={{ margin: 0, color: '#2c2c2c' }}>{monthKey} ({data.factures.length} factures)</h4>
                 <div>
-                  <span style={{ marginRight: '1rem', color: '#10b981', fontSize: '0.9rem' }}>
+                  <span style={{ marginRight: '1rem', color: '#556b2f', fontSize: '0.9rem' }}>
                     Encaissé: {formatMontant(data.payeTTC)}
                   </span>
-                  <strong>{formatMontant(data.totalTTC)} TTC</strong>
+                  <strong style={{ color: '#2c2c2c' }}>{formatMontant(data.totalTTC)} TTC</strong>
                 </div>
               </div>
 
               {isSelected && (
-                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #334155', overflowX: 'auto' }}>
-                  <p style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.5rem' }}>💡 Cliquez sur une ligne pour voir le détail des règlements associés</p>
-                  <table className="compact-table" style={{ width: '100%', fontSize: '0.8rem', minWidth: '1000px' }}>
+                <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #d9cfc0', overflowX: 'auto' }}>
+                  <p style={{ fontSize: '0.75rem', color: '#666', marginBottom: '0.75rem' }}>💡 Cliquez sur une ligne pour voir le détail des règlements associés</p>
+                  <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '1200px', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr style={{ textAlign: 'left', borderBottom: '1px solid #334155' }}>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap' }}>Réf</th>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap' }}>Période</th>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap', textAlign: 'right' }}>Montant Orig.</th>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap', textAlign: 'right' }}>Payé</th>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap', textAlign: 'right' }}>Remise</th>
-                        <th style={{ padding: '0.4rem', whiteSpace: 'nowrap' }}>Trésorerie</th>
+                      <tr style={{ background: '#e8dcc8', borderBottom: '2px solid #d9cfc0', color: '#2c2c2c' }}>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'left', fontWeight: '600' }}>Réf</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>TTC Total</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>Payé</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>Cashback</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>Restant</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>Dépassement</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'right', fontWeight: '600' }}>Remboursement</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'center', fontWeight: '600' }}>Action</th>
+                        <th style={{ padding: '0.6rem 0.8rem', whiteSpace: 'nowrap', textAlign: 'center', fontWeight: '600' }}>Date de Remboursement</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.factures.map(f => {
-                        const remiseAmount = f._amounts.totalTTC - f._amounts.payeTTC;
+                      {data.factures.map((f, idx) => {
+                        const isEvenRow = idx % 2 === 0;
+                        const remb = remboursementsMap[f.ref];
+                        const isRefunded = !!remb;
+
+                        // Original values from extractInvoiceAmounts
+                        const originalPaye = f._amounts.payeTTC;
+                        const originalCashback = f._amounts.totalRemiseMontant || 0;
+                        const totalTTC = f._amounts.totalTTC;
+                        const originalSurplus = f._amounts.surplusTTC || 0;
+
+                        // After refund logic:
+                        // - payé becomes cashback_avant (cashback moves to payé)
+                        // - cashback becomes cashback_apres_annulation si annulation précédente, sinon 0
+                        // - restant = totalTTC - new payé
+                        // - remboursement = old payé (montant_rembourse)
+                        let displayPaye, displayCashback, displayRestant, displaySurplus, displayRemboursement;
+
+                        if (isRefunded) {
+                          displayPaye = remb.cashback_avant;         // cashback goes to payé
+                          // Si une annulation a déjà eu lieu, afficher cashback recalculé
+                          displayCashback = (remb.cashback_apres_annulation != null)
+                            ? remb.cashback_apres_annulation
+                            : 0;
+                          displayRestant = totalTTC - displayPaye;    // restant recalculated
+                          displaySurplus = 0;
+                          displayRemboursement = remb.montant_rembourse; // old payé amount
+                        } else {
+                          displayPaye = originalPaye;
+                          displayCashback = originalCashback;
+                          displayRestant = f._amounts.restantTTC;
+                          displaySurplus = originalSurplus;
+                          displayRemboursement = 0;
+                        }
+
                         return (
                           <tr
                             key={f.id}
                             onClick={() => setSelectedInvoiceModal(f)}
-                            style={{ cursor: 'pointer' }}
-                            className="table-row-hover"
+                            style={{
+                              cursor: 'pointer',
+                              background: isEvenRow ? '#faf8f4' : '#f5f1e8',
+                              borderBottom: '1px solid #e8dcc8',
+                              color: '#2c2c2c',
+                              transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#ede5d8'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = isEvenRow ? '#faf8f4' : '#f5f1e8'}
                           >
-                            <td style={{ padding: '0.4rem', color: 'var(--primary-color)', fontWeight: 'bold', whiteSpace: 'nowrap' }}>{f.ref}</td>
-                            <td style={{ padding: '0.4rem', whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{f._amounts.intervals.invoicePeriod}</td>
-                            <td style={{ padding: '0.4rem', fontWeight: 'bold', color: '#cbd5e1', textAlign: 'right', whiteSpace: 'nowrap' }}>{formatMontant(f._amounts.totalTTC)}</td>
-                            <td style={{ padding: '0.4rem', fontWeight: 'bold', color: '#10b981', textAlign: 'right', whiteSpace: 'nowrap' }}>{formatMontant(f._amounts.payeTTC)}</td>
-                            <td style={{ padding: '0.4rem', fontWeight: 'bold', color: '#f59e0b', textAlign: 'right' }}>
-                              <div style={{ whiteSpace: 'nowrap' }}>
-                                {formatMontant(remiseAmount)}
-                                {f._amounts.remisePercent > 0 && <div style={{ fontSize: '0.7rem', color: '#94a3b8', lineHeight: '1' }}>({f._amounts.remisePercent}%)</div>}
-                              </div>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', color: '#2c5aa0' }}>{f.ref}</td>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right' }}>{formatMontant(totalTTC)}</td>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right', color: isRefunded ? '#c47808' : '#2c5aa0' }}>
+                              {formatMontant(displayPaye)}
+                              {isRefunded && <div style={{ fontSize: '0.65rem', color: '#888', lineHeight: '1.1' }}>(ex-cashback)</div>}
                             </td>
-                            <td style={{ padding: '0.4rem', fontSize: '0.75rem' }}>
-                              {f._amounts.linePayments.length > 0 ? (
-                                f._amounts.linePayments.map((p, idx) => (
-                                  <div key={idx} style={{ marginBottom: '0.1rem', whiteSpace: 'nowrap' }}>
-                                    {mapTargetTreasury(p) === 'Caisse' ? '💵' : '💳'} {formatMontant(p.montant || p.amount)}
-                                  </div>
-                                ))
-                              ) : (
-                                <span style={{ whiteSpace: 'nowrap' }}>{f._amounts.caissePaid > 0 ? '💵 Caisse' : '💳 Banque'}</span>
-                              )}
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right', color: displayCashback > 0 ? '#c47808' : '#888' }}>
+                              {formatMontant(displayCashback)}
+                            </td>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right', color: displayRestant > 0 ? '#d84c2f' : '#2c5aa0' }}>
+                              {formatMontant(displayRestant)}
+                            </td>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right', color: displaySurplus > 0 ? '#10b981' : '#888' }}>
+                              {displaySurplus > 0 ? formatMontant(displaySurplus) : '-'}
+                            </td>
+                            <td style={{ padding: '0.6rem 0.8rem', fontWeight: '600', textAlign: 'right', color: displayRemboursement > 0 ? '#d84c2f' : '#888' }}>
+                              {displayRemboursement > 0 ? formatMontant(displayRemboursement) : '-'}
+                            </td>
+                            <td style={{ padding: '0.6rem 0.8rem', textAlign: 'center' }}>
+                              <button
+                                disabled={isRefunded}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!isRefunded && onRembourser) {
+                                    onRembourser(f, f._amounts);
+                                  }
+                                }}
+                                style={{
+                                  padding: '0.35rem 0.75rem',
+                                  borderRadius: '4px',
+                                  border: 'none',
+                                  fontSize: '0.8rem',
+                                  fontWeight: '600',
+                                  cursor: isRefunded ? 'not-allowed' : 'pointer',
+                                  background: isRefunded ? '#ccc' : '#d84c2f',
+                                  color: isRefunded ? '#888' : '#fff',
+                                  opacity: isRefunded ? 0.6 : 1,
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => { if (!isRefunded) e.currentTarget.style.background = '#b33a22'; }}
+                                onMouseLeave={(e) => { if (!isRefunded) e.currentTarget.style.background = '#d84c2f'; }}
+                              >
+                                {isRefunded ? '✓ Remboursé' : 'Rembourser'}
+                              </button>
+                            </td>
+                            {/* Date de Remboursement : affiche la date stockée en DB */}
+                            <td style={{ padding: '0.6rem 0.8rem', fontSize: '0.8rem', color: isRefunded ? '#2c5aa0' : '#999', fontWeight: isRefunded ? '600' : '400' }}>
+                              {isRefunded && remb.date_remboursement
+                                ? remb.date_remboursement
+                                : <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>
+                              }
                             </td>
                           </tr>
                         );

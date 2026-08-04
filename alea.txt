@@ -1,55 +1,103 @@
-1. prix produit mettre sur catalogue, via import (FrontOffice.jsx)
-    -> prix max ttc (prix unitaire*taxe)
-     exemple : import-data-série4 - detail_facture.csv (source)
-        -> pu_hors_Taxe = 1800, taxe = 14.50% => pu_hors_Taxe*taxe*100 = 1800*14.50%*100 = 2610 €
+generer payement 
+new page : (notre GenererPayment.jsx actuel)
+saisie paiement :
+    date debut, total montant, nb , tout les x jour (x jour configurable)
 
-2. Quand on ajoute panier, on voit qt, nom produit et zone remise en % (en pop-up) (FrontOffice.jsx)
-    Prix zone de liste des produits (prix et taxe en %) (new page)
-    -> on voit tout les produits mode liste si plusieur mm type 
-        exemple : P1 
-            listes produits (choix unique ou multiple) : 1000euro 10%, 2000euro 1%, 1500 50%
-            Qte : - nb +
-            Remise : ...%
-            Valider  
+exemple: 28 , 1000 , 5 , 7
 
-3. Reglement : (Payment.jsx)
-    choisir facture, en totaliter le paiement (mettre aussi option Paymentpartiel)
+=> 28 , 200 
++7 , 200
++7, 200
+...
 
-scenario exemple :
-    reduce 30% et fact 1000€ ttc, payer :
-    dolibarr payer en 1000€ (montant facture original)
-    stock en autre endroit le 30%
-
-    dashbord ajout colonne : (dashboard.jsx)
-    colonne facture original et montant facture payer reelement (avec remise) et remise reglement
-    suivant notre exemple :
-    1000 | 700 | 300
+il est possible que le montant soit superieur, donc il y a depassement, donc le dernier montant peut prendre le depassement
+si il y en a : dernier ligne => 200 + depassement = final
 
 
-    scenario : (à faire lors du test)
-    reset et import 
-    vente (frontoffice)
-    config reglement (remisesetting)
-    saisie reglement (payment)
-    dashboard (vérification)
+total : 15 626.40
 
-    INFO
-Reinitialiser données
+fonction payment(date,montant,facture)
 
-Configuration remise
-0jours = 30%
-Moins de 7jours = 20%
-Moins de 15jours = 15%
-Moins de 30jours = 10%
-Autres = 0%
+config 30% remise (utilisation)
 
-Achat 
-F003 = 1 P1 avec (1800  / 14,50%); et 2 P2 avec (1200 / 20%)
+table payment (somme)
 
-Reglement / paiement
-F003 , 27/07/2026
 
-Dashboard
-Montant total Original : 12125,4
-Montant total payé : 9287, 34
-Montant total Remise : 2838,06
+scenario
+P1: 2
+P2: 3 
+5000 payement
+
+generer payment
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+ajout colonne remboursement (bouton rembourser facture) (Dashboard.jsx)
+rembourse la facture aligner au bouton (le cashback ne se rembourse pas)
+num  | ttc T | Paye | cashback| Restant | remboursement |
+F001 | 10000 | 3500 |   1500  |  5000   |      -        | rembourser
+F002 | 9000  | 4000 |   1000  |  5000   |      -        | rembourser
+
+quand on rembourse, la paye revient au client et paye devient 0 et le cashback passe dans la colonne Paye et devient 0
+tandis que paye à ce moment aura la valeur de cashback (cashback ant de devenir 0) 
+exemple : rembourse F001
+
+=> F001 | 10000 | 1500 | 0 | 8500 | 3500 
+
+le cashback va dans la section payer apres remboursement
+la colonne cashback devient 0
+restant (reste à payer) devient 8500 (colonne payé + restant) dû au remboursement
+colonne remboursement devient 3500
+le bouton rembourser devient alors inutilisable 
+
+New page : liste Remboursement avec bouton annuler remboursement (ListeRemboursement.jsx)
+si on annule remboursement, le remboursement effectuer dans le dashboard est annuler et revient à sa valeur avant remboursement
+et le bouton remboursement redevient actif 
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Liste Remboursement :
+
+il y a un coût dans l'annulation de remboursement
+explication détailler :
+si je fait annuler remboursement, il y a demande de date à inserer dans un pop up
+ -> date de remboursement dans dashboard et date d'annulation remboursement dans Liste Remboursement
+
+ insertion de date de remboursement et annulation remboursement dans les tableaux
+
+en regardant les dates d'annulation, et date remboursement
+
+si je rembourse le 27/07/2026, et j'annule le 27/07/2026 = le scenario suit le mm cours mais le cashback sera pris selon le pourcentage de la remise
+alors le cashback diminue selon la remise configurer (suit l'intervale de date)
+
+exemple : 
+1500 cashback, remboursement
+annulation remboursement jour J (mm date que le remboursement) => cashback = 375 (apres annulation)
+    remise actu (jour J) = 25%
+
+si cashback, remboursement
+annulation remboursement 5j (intervale 5j) => cashback = 225 (apres annulation)
+    remise -7j (intervale) = 15%
+
+le cashback sera prise par le pourcentage de la remise selon l'intervale jour configurer dans la conf remise
+apres annulation, dans le dashboard le cashback sera alors reduit par rapport à celui avant remboursement
+
+A faire :
+
+Code à modifier selon logique :
+ListeRemboursement.jsx, RemboursementPanelList.jsx, Dashboard.jsx, DashboardMonthPanel.jsx, app.py (insertion date)
+
+ListeRemboursement et Dashboard : appel fonction pour date, calcul cashback apres annulation
+RemboursementPanelList et DashboardMonthPanel : pour mettre l'insertion date
+app.py : pour mettre les dates et calcul la remise utiliser lors de l'annulation remboursement
+    -> Jour.now ou interval jour (comme 7j, 15j, 30j,...) suivant la configuration dans remisesetting.jsx
+
+
+REMISE CONFIG :
+    Maintenant : 30%
+    7j : 20%
+    15j : 15%
+    30j : 7.5%
+    +31j : 0%

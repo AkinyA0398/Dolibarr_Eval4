@@ -155,6 +155,59 @@ const unlockAndDeleteInvoice = async (invoiceId, log) => {
   return result !== null;
 };
 
+const resetAllData = async (addLog = () => {}) => {
+  addLog('🔄 Début de la réinitialisation des données Eval4...');
+
+  const invoices = await apiClient('/invoices?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+  if (Array.isArray(invoices) && invoices.length > 0) {
+    addLog(`🧾 Suppression de ${invoices.length} facture(s) en cours...`);
+    for (const inv of invoices) {
+      const invoiceId = inv.id || inv.rowid;
+      if (invoiceId) {
+        addLog(`  → Suppression facture #${invoiceId}...`);
+        await unlockAndDeleteInvoice(invoiceId, addLog);
+      }
+    }
+  } else {
+    addLog('🧾 Aucune facture trouvée à supprimer.');
+  }
+
+  const thirdparties = await apiClient('/thirdparties?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+  const clientsToDelete = Array.isArray(thirdparties)
+    ? thirdparties.filter(tp => String(tp.code_client || tp.client_code || '').trim() === '-1')
+    : [];
+
+  if (clientsToDelete.length > 0) {
+    addLog(`👤 Suppression de ${clientsToDelete.length} client(s) importés...`);
+    for (const client of clientsToDelete) {
+      const clientId = client.id || client.rowid;
+      if (clientId) {
+        addLog(`  → Suppression client #${clientId}...`);
+        await safeDelete(`/thirdparties/${clientId}`, (msg) => addLog(`    ${msg}`));
+      }
+    }
+  } else {
+    addLog('👤 Aucun client importé trouvé à supprimer.');
+  }
+
+  const products = await apiClient('/products?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
+  if (Array.isArray(products) && products.length > 0) {
+    addLog(`📦 Suppression de ${products.length} produit(s) en cours...`);
+    for (const product of products) {
+      const productId = product.id || product.rowid;
+      if (productId) {
+        addLog(`  → Suppression produit #${productId}...`);
+        await safeDelete(`/products/${productId}`, (msg) => addLog(`    ${msg}`));
+      }
+    }
+  } else {
+    addLog('📦 Aucun produit trouvé à supprimer.');
+  }
+
+  addLog('✅ Réinitialisation des données Eval4 terminée.');
+  return true;
+};
+
 // --- MODULE API DOLIBARR ---
 
 export const apiDolibarr = {
@@ -308,7 +361,9 @@ export const apiDolibarr = {
   getInvoices: async () => {
     try {
       const invoices = await apiClient('/invoices?limit=500&sortfield=t.rowid&sortorder=DESC', { silent: true }).catch(() => []);
-      return (invoices || []).filter(inv => String(inv.status) !== '0' && String(inv.statut) !== '0');
+      // Certaines factures importées peuvent rester au statut 0 (brouillon) dans Dolibarr,
+      // donc on ne les exclut plus ici pour qu'elles apparaissent dans l'interface.
+      return invoices || [];
     } catch (error) {
       console.error("Erreur récupération factures :", error);
       return [];
@@ -469,6 +524,10 @@ export const apiDolibarr = {
       console.error("Erreur récupération paiements :", error);
       return [];
     }
+  },
+
+  resetAllData: async (addLog = () => {}) => {
+    return resetAllData(addLog);
   },
 
   createPayment: async (data) => {

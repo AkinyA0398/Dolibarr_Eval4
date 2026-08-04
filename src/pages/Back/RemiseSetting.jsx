@@ -79,8 +79,8 @@ export default function RemiseSettings() {
 
   const handleSave = async (id) => {
     const draft = draftValues[id];
-    const numDiscount = parseInt(draft.discount_percentage, 10);
-    const numDays = parseInt(draft.max_days, 10);
+    const numDiscount = parseFloat(draft.discount_percentage);
+    const numDays = parseFloat(draft.max_days);
 
     if (
       Number.isNaN(numDiscount) || numDiscount < 0 || numDiscount > 100 ||
@@ -148,8 +148,8 @@ export default function RemiseSettings() {
     e.preventDefault();
     if (!newLabel.trim()) return;
 
-    const numDiscount = parseInt(newDiscount, 10);
-    const numDays = parseInt(newMaxDays, 10);
+    const numDiscount = parseFloat(newDiscount);
+    const numDays = parseFloat(newMaxDays);
 
     if (
       Number.isNaN(numDiscount) || numDiscount < 0 || numDiscount > 100 ||

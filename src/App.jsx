@@ -6,6 +6,7 @@ import Import from './pages/Back/Import.jsx';
 import Reset from './pages/Back/Reset.jsx';
 import FrontOffice from './pages/Front/FrontOffice.jsx';
 import RemiseSettings from './pages/Back/RemiseSetting.jsx';
+import ListeRemboursement from './pages/Back/ListeRemboursement.jsx';
 
 export default function App() {
   const [authToken, setAuthToken] = useState(null);
@@ -45,6 +46,7 @@ export default function App() {
               <div className="admin-actions">
                 <span className="badge-admin">Admin</span>
                 <button className={`nav-btn ${currentView === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentView('dashboard')}>Dashboard</button>
+                <button className={`nav-btn ${currentView === 'remboursement' ? 'active' : ''}`} onClick={() => setCurrentView('remboursement')}>Remboursement</button>
                 <button className={`nav-btn ${currentView === 'remiseSettings' ? 'active' : ''}`} onClick={() => setCurrentView('remiseSettings')}>Remise</button>
                 <button className={`nav-btn ${currentView === 'import' ? 'active' : ''}`} onClick={() => setCurrentView('import')}>Import</button>
                 <button className="btn btn-danger btn-sm" onClick={() => setCurrentView('reset')}>Reset</button>
@@ -63,6 +65,7 @@ export default function App() {
         {currentView === 'remiseSettings' && <RemiseSettings />}
         {currentView === 'import' && <Import />}
         {currentView === 'reset' && <Reset />}
+        {currentView === 'remboursement' && <ListeRemboursement />}
       </main>
     </div>
   );

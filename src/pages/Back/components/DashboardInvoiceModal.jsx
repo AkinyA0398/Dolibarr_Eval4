@@ -4,7 +4,9 @@ import { formatMontant, mapTargetTreasury } from './DashboardUtils.jsx';
 export default function DashboardInvoiceModal({ selectedInvoiceModal, closeModal }) {
   if (!selectedInvoiceModal) return null;
 
-  const remiseAmount = selectedInvoiceModal._amounts.totalTTC - selectedInvoiceModal._amounts.payeTTC;
+  const remiseAmount = selectedInvoiceModal._amounts.totalRemiseMontant || 0;
+  const surplusAmount = selectedInvoiceModal._amounts.surplusTTC || 0;
+  const restantAmount = selectedInvoiceModal._amounts.restantTTC || 0;
   const remisePercent = remiseAmount > 0 && selectedInvoiceModal._amounts.totalTTC > 0
     ? ((remiseAmount / selectedInvoiceModal._amounts.totalTTC) * 100).toFixed(2)
     : 0;
@@ -20,20 +22,30 @@ export default function DashboardInvoiceModal({ selectedInvoiceModal, closeModal
         <p><strong>Client :</strong> {selectedInvoiceModal.socid_name || selectedInvoiceModal.nom_client || 'Client Général'}</p>
         <p><strong>Période :</strong> {selectedInvoiceModal._amounts.intervals.invoicePeriod}</p>
 
-        <div style={{ background: '#0f172a', padding: '1rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid #334155' }}>
-          <table style={{ width: '100%', fontSize: '0.9rem', textAlign: 'right' }}>
+        <div style={{ background: '#f5f1e8', padding: '1rem', borderRadius: '6px', marginBottom: '1rem', border: '1px solid #e8dcc8' }}>
+          <table style={{ width: '100%', fontSize: '0.9rem', color: '#2c2c2c' }}>
             <tbody>
-              <tr style={{ borderBottom: '1px solid #334155' }}>
-                <td style={{ textAlign: 'left', padding: '0.5rem', color: '#94a3b8' }}>Montant Original TTC :</td>
-                <td style={{ padding: '0.5rem', fontWeight: 'bold', color: '#cbd5e1' }}>{formatMontant(selectedInvoiceModal._amounts.totalTTC)}</td>
+              <tr style={{ borderBottom: '1px solid #e8dcc8' }}>
+                <td style={{ textAlign: 'left', padding: '0.5rem', color: '#555' }}>Montant Original TTC :</td>
+                <td style={{ padding: '0.5rem', fontWeight: 'bold', textAlign: 'right' }}>{formatMontant(selectedInvoiceModal._amounts.totalTTC)}</td>
               </tr>
-              <tr style={{ borderBottom: '1px solid #334155' }}>
-                <td style={{ textAlign: 'left', padding: '0.5rem', color: '#94a3b8' }}>Montant Payé TTC :</td>
-                <td style={{ padding: '0.5rem', fontWeight: 'bold', color: '#10b981' }}>{formatMontant(selectedInvoiceModal._amounts.payeTTC)}</td>
+              <tr style={{ borderBottom: '1px solid #e8dcc8', background: '#faf8f4' }}>
+                <td style={{ textAlign: 'left', padding: '0.5rem', color: '#555' }}>Montant Payé TTC :</td>
+                <td style={{ padding: '0.5rem', fontWeight: 'bold', textAlign: 'right', color: '#2c5aa0' }}>{formatMontant(selectedInvoiceModal._amounts.payeTTC)}</td>
               </tr>
-              <tr style={{ background: '#1e293b' }}>
-                <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold', color: '#f59e0b' }}>Remise Réglement :</td>
-                <td style={{ padding: '0.5rem', fontWeight: 'bold', color: '#f59e0b', fontSize: '1.1rem' }}>
+              <tr style={{ borderBottom: '1px solid #e8dcc8' }}>
+                <td style={{ textAlign: 'left', padding: '0.5rem', color: '#555' }}>Reste à payer :</td>
+                <td style={{ padding: '0.5rem', fontWeight: 'bold', textAlign: 'right', color: '#d84c2f' }}>{formatMontant(restantAmount)}</td>
+              </tr>
+              {surplusAmount > 0 && (
+                <tr style={{ borderBottom: '1px solid #e8dcc8', background: '#faf8f4' }}>
+                  <td style={{ textAlign: 'left', padding: '0.5rem', color: '#555' }}>Excédent / Surplus :</td>
+                  <td style={{ padding: '0.5rem', fontWeight: 'bold', textAlign: 'right', color: '#7c3aed' }}>{formatMontant(surplusAmount)}</td>
+                </tr>
+              )}
+              <tr style={{ background: '#e8dcc8', borderRadius: '0 0 4px 4px' }}>
+                <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold', color: '#c47808' }}>Remise Réglement :</td>
+                <td style={{ padding: '0.5rem', fontWeight: 'bold', textAlign: 'right', color: '#c47808', fontSize: '1.1rem' }}>
                   {formatMontant(remiseAmount)} ({remisePercent}%)
                 </td>
               </tr>
@@ -41,7 +53,7 @@ export default function DashboardInvoiceModal({ selectedInvoiceModal, closeModal
           </table>
         </div>
 
-        <h4 style={{ marginTop: '1rem', borderBottom: '1px solid #334155', paddingBottom: '0.25rem' }}>Règlements enregistrés</h4>
+        <h4 style={{ marginTop: '1rem', borderBottom: '1px solid #e8dcc8', paddingBottom: '0.5rem', color: '#2c2c2c' }}>Règlements enregistrés</h4>
         {selectedInvoiceModal._amounts.linePayments.length > 0 ? (
           <ul style={{ paddingLeft: '1.2rem' }}>
             {selectedInvoiceModal._amounts.linePayments.map((p, idx) => (
