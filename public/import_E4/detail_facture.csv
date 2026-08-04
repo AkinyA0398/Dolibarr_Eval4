@@ -1,0 +1,4 @@
+ref_detail,num_facture,ref_produit,produit,quantite,pu_hors_Taxe,taxe,remise
+1,F001,P1,Laptop X3,2,1800,"14,50%",
+2,F001,P2,Iphone 17,1,1200,20%,
+3,F002,P1,Laptop X3,1,1600,20%,"15,50%"

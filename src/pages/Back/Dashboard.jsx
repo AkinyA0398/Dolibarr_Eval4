@@ -1,191 +1,422 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { apiDolibarr } from '../../api/apiDolibarr';
-
-const formatMontant = (val) => {
-  const num = Number(val) || 0;
-  return new Intl.NumberFormat('fr-FR', { 
-    style: 'currency', 
-    currency: 'EUR',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(num);
-};
-
-const formatDate = (dateStr) => {
-  if (!dateStr) return '—';
-  if (!isNaN(dateStr)) {
-    return new Date(Number(dateStr) * 1000).toLocaleDateString('fr-FR');
-  }
-  const d = new Date(dateStr);
-  return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString('fr-FR');
-};
+import { apiLocal } from '../../api/apiLocal';
+import DashboardFilters from './components/DashboardFilters.jsx';
+import DashboardMonthRecap from './components/DashboardMonthRecap.jsx';
+import DashboardMonthPanels from './components/DashboardMonthPanels.jsx';
+import DashboardProductPanels from './components/DashboardProductPanels.jsx';
+import DashboardInvoiceModal from './components/DashboardInvoiceModal.jsx';
+import DashboardProductModal from './components/DashboardProductModal.jsx';
+import { formatMontant, extractInvoiceAmounts } from './components/DashboardUtils.jsx';
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
-  const [metrics, setMetrics] = useState({
-    ca: 0,
-    salaires: 0,
-    taxes: 0,
-    depenses: 0,
-    solde: 0
-  });
-  const [recentData, setRecentData] = useState([]);
+  const [rawInvoices, setRawInvoices] = useState([]);
+  const [rawProducts, setRawProducts] = useState([]);
+  const [paymentsMap, setPaymentsMap] = useState({});
+  const [remboursementsMap, setRemboursementsMap] = useState({});
+
+  // Filtres
+  const [searchQuery, setSearchQuery]   = useState("");
+  const [filterMonth, setFilterMonth]   = useState("ALL");
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  const [filterMode, setFilterMode]     = useState("ALL");
+
+  const [selectedMonth, setSelectedMonth]               = useState(null);
+  const [selectedInvoiceModal, setSelectedInvoiceModal] = useState(null);
+  const [selectedProductModal, setSelectedProductModal] = useState(null);
+
+  // Popup remboursement : stocke la facture en attente + la date saisie
+  const [rembPopup, setRembPopup] = useState(null); // { facture, amounts }
+  const [rembDate, setRembDate]   = useState(() => new Date().toISOString().slice(0, 10));
+
+  const loadRemboursements = useCallback(async () => {
+    try {
+      const data = await apiLocal('/api/remboursements');
+      const map = {};
+      (data || []).forEach(r => {
+        map[r.invoice_ref] = r;
+      });
+      setRemboursementsMap(map);
+    } catch (e) {
+      console.warn("Impossible de charger les remboursements:", e);
+    }
+  }, []);
+
+  // Ouvre le popup pour saisir la date de remboursement
+  const handleRembourser = useCallback((facture, amounts) => {
+    setRembDate(new Date().toISOString().slice(0, 10));
+    setRembPopup({ facture, amounts });
+  }, []);
+
+  // Confirme le remboursement avec la date saisie dans le popup
+  const handleConfirmRembourser = useCallback(async () => {
+    if (!rembPopup) return;
+    const { facture, amounts } = rembPopup;
+    const ref          = facture.ref;
+    const payeAvant    = amounts.payeTTC;
+    const cashbackAvant = amounts.totalRemiseMontant || 0;
+    const modeCode     = (amounts.modeCode || 'LIQ').toLowerCase();
+    // Normaliser le mode de paiement vers cash/cheque/cb
+    const paymentMode =
+      modeCode.includes('chq') || modeCode.includes('cheque') ? 'cheque' :
+      modeCode.includes('cb')  || modeCode.includes('card')   ? 'cb' :
+      'cash';
+
+    try {
+      await apiLocal('/api/remboursements', {
+        method: 'POST',
+        body: {
+          invoice_ref:        ref,
+          invoice_id:         facture.id || '',
+          montant_rembourse:  payeAvant,
+          paye_avant:         payeAvant,
+          cashback_avant:     cashbackAvant,
+          date_remboursement: rembDate,
+          payment_mode:       paymentMode,
+        }
+      });
+      setRembPopup(null);
+      await loadRemboursements();
+    } catch (e) {
+      console.error("Erreur lors du remboursement:", e);
+      alert("Erreur: " + (e.message || "Impossible de rembourser cette facture"));
+    }
+  }, [rembPopup, rembDate, loadRemboursements]);
 
   useEffect(() => {
     const loadDashboardData = async () => {
       try {
-        const [salaires, banques, factures, taxes, depenses] = await Promise.all([
-          apiDolibarr.getSalaires(),
-          apiDolibarr.getBankAccounts(),
-          apiDolibarr.getInvoices(),
-          apiDolibarr.getTaxes(),
-          apiDolibarr.getSpecialExpenses()
-        ]);
+        const facturesRaw = await apiDolibarr.getInvoices() || [];
+        // Nettoyer les brouillons (statut/status == 0) avant d'alimenter le dashboard
+        const factures = (facturesRaw || []).filter(inv => String(inv.statut) !== '0' && String(inv.status) !== '0');
+        const products = await apiDolibarr.getProducts() || [];
 
-        // Calculs des KPIs
-        let totalSalaires = 0;
-        (salaires || []).forEach(sal => totalSalaires += Number(sal.amount || 0));
+        let pMap = {};
+        try {
+          if (apiDolibarr.getPayments) {
+            const paiementsList = await apiDolibarr.getPayments() || [];
+            
+            paiementsList.forEach(p => {
+              const keys = [
+                p.fk_facture, 
+                p.fk_facture_id, 
+                p.invoice_id, 
+                p.num_facture, 
+                p.facnumber, 
+                p.ref_facture, 
+                p.ref
+              ];
 
-        let totalCA = 0;
-        (factures || []).forEach(inv => totalCA += Number(inv.total_ttc || inv.total || 0));
+              if (Array.isArray(p.lines)) {
+                p.lines.forEach(l => {
+                  if (l.fk_facture) keys.push(l.fk_facture);
+                  if (l.facnumber) keys.push(l.facnumber);
+                  if (l.ref) keys.push(l.ref);
+                });
+              }
 
-        let totalTaxes = 0;
-        (taxes || []).forEach(tax => totalTaxes += Number(tax.amount || 0));
+              keys.filter(Boolean).forEach(k => {
+                const facKey = String(k).trim().toUpperCase();
+                if (!pMap[facKey]) pMap[facKey] = [];
+                if (!pMap[facKey].some(existing => existing.id === p.id && p.id !== undefined)) {
+                  pMap[facKey].push(p);
+                }
+              });
+            });
+          }
+        } catch (e) {
+          console.warn("Impossible de charger l'API règlements globale :", e);
+        }
 
-        let totalDepenses = 0;
-        (depenses || []).forEach(dep => totalDepenses += Number(dep.amount || 0));
+        setRawInvoices(factures);
+        setRawProducts(products);
+        setPaymentsMap(pMap);
 
-        let totalSolde = 0;
-        // Dans Dolibarr, le solde peut être dans une sous-propriété selon l'API, on tente "balance" ou "solde"
-        (banques || []).forEach(acc => totalSolde += Number(acc.balance || acc.solde || 0));
-
-        setMetrics({
-          ca: totalCA,
-          salaires: totalSalaires,
-          taxes: totalTaxes,
-          depenses: totalDepenses,
-          solde: totalSolde
-        });
-
-        // Combine quelques données pour la table "Transactions récentes"
-        const combined = [
-          ...(factures || []).map(f => ({ type: 'Facture', ref: f.ref, date: f.date || f.datef, montant: f.total_ttc || f.total, status: f.statut === '2' ? 'Payée' : 'En attente' })),
-          ...(salaires || []).map(s => ({ type: 'Salaire', ref: `Réf: ${s.ref_salaire}`, date: s.date_debut, montant: s.amount, status: 'Fiche' })),
-          ...(taxes || []).map(t => ({ type: 'Taxe', ref: `Taxe ${t.id}`, date: t.date_creation || t.datec, montant: t.amount, status: 'Enregistrée' }))
-        ];
-
-        // Tri par date (approximatif si les formats diffèrent)
-        combined.sort((a, b) => {
-          const tA = new Date(a.date).getTime() || 0;
-          const tB = new Date(b.date).getTime() || 0;
-          return tB - tA; // Décroissant
-        });
-
-        setRecentData(combined.slice(0, 15)); // 15 derniers éléments
-
+        // Load remboursements
+        await loadRemboursements();
       } catch (err) {
-        console.error("Erreur de chargement des données financières", err);
+        console.error("Erreur de chargement des données du dashboard", err);
       } finally {
         setLoading(false);
       }
     };
     loadDashboardData();
-  }, []);
+  }, [loadRemboursements]);
+
+  const availableMonths = useMemo(() => {
+    const months = new Set();
+    rawInvoices.forEach(inv => {
+      let d;
+      if (inv.date) d = new Date(isNaN(inv.date) ? inv.date : Number(inv.date) * 1000);
+      else if (inv.datef) d = new Date(isNaN(inv.datef) ? inv.datef : Number(inv.datef) * 1000);
+      if (d && !isNaN(d.getTime())) {
+        months.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+      }
+    });
+    return Array.from(months).sort().reverse();
+  }, [rawInvoices]);
+
+  const filteredInvoices = useMemo(() => {
+    return rawInvoices.filter(inv => {
+      let d;
+      if (inv.date) d = new Date(isNaN(inv.date) ? inv.date : Number(inv.date) * 1000);
+      else if (inv.datef) d = new Date(isNaN(inv.datef) ? inv.datef : Number(inv.datef) * 1000);
+      const monthKey = d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` : "";
+
+      if (filterMonth !== "ALL" && monthKey !== filterMonth) return false;
+
+      const amounts = extractInvoiceAmounts(inv, paymentsMap);
+
+      if (filterStatus === "PAID" && amounts.restantTTC > 0.01) return false;
+      if (filterStatus === "UNPAID" && amounts.restantTTC <= 0.01) return false;
+
+      if (filterMode !== "ALL") {
+        if (filterMode === "Caisse" && amounts.caissePaid <= 0) return false;
+        if (filterMode === "Banque" && amounts.banquePaid <= 0) return false;
+      }
+
+      if (searchQuery.trim() !== "") {
+        const query = searchQuery.toLowerCase();
+        const refMatch = inv.ref?.toLowerCase().includes(query);
+        const clientMatch = (inv.socid_name || inv.nom_client || "").toLowerCase().includes(query);
+        if (!refMatch && !clientMatch) return false;
+      }
+
+      return true;
+    });
+  }, [rawInvoices, filterMonth, filterStatus, filterMode, searchQuery, paymentsMap]);
+
+  const globalKpis = useMemo(() => {
+    let totalTTC = 0, payeTTC = 0, restantTTC = 0, surplusTTC = 0;
+    let totalCaisse = 0;
+    let totalBanque = 0;
+    let totalRemisesMontant = 0;
+
+    filteredInvoices.forEach(inv => {
+      const amounts = extractInvoiceAmounts(inv, paymentsMap);
+      totalTTC += amounts.totalTTC;
+      payeTTC  += amounts.payeTTC;
+      restantTTC += amounts.restantTTC;
+      surplusTTC += amounts.surplusTTC || 0;
+      totalRemisesMontant += amounts.totalRemiseMontant;
+      totalCaisse += amounts.caissePaid;
+      totalBanque += amounts.banquePaid;
+    });
+
+    return {
+      count: filteredInvoices.length,
+      totalTTC,
+      payeTTC,
+      restantTTC,
+      surplusTTC,
+      totalCaisse,
+      totalBanque,
+      totalRemisesMontant
+    };
+  }, [filteredInvoices, paymentsMap]);
+
+  const invoicesByMonth = useMemo(() => {
+    const monthly = {};
+    filteredInvoices.forEach(inv => {
+      let d;
+      if (inv.date) d = new Date(isNaN(inv.date) ? inv.date : Number(inv.date) * 1000);
+      else if (inv.datef) d = new Date(isNaN(inv.datef) ? inv.datef : Number(inv.datef) * 1000);
+      if (!d) return;
+
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthly[monthKey]) {
+        monthly[monthKey] = { totalTTC: 0, payeTTC: 0, restantTTC: 0, factures: [] };
+      }
+
+      const amounts = extractInvoiceAmounts(inv, paymentsMap);
+      monthly[monthKey].totalTTC += amounts.totalTTC;
+      monthly[monthKey].payeTTC += amounts.payeTTC;
+      monthly[monthKey].restantTTC += amounts.restantTTC;
+
+      monthly[monthKey].factures.push({
+        ...inv,
+        _amounts: amounts,
+        _date: d.toLocaleDateString('fr-FR')
+      });
+    });
+    return monthly;
+  }, [filteredInvoices, paymentsMap]);
+
+  const salesByProduct = useMemo(() => {
+    const productMap = {};
+
+    rawProducts.forEach(p => {
+      productMap[p.id] = {
+        id: p.id,
+        label: p.label || p.libelle || "Sans nom",
+        ref: p.ref || "N/A",
+        unitPrice: parseFloat(p.price || p.price_ht || 0),
+        totalQty: 0,
+        totalSalesTTC: 0,
+        totalSalesHT: 0,
+        totalRemise: 0,
+        invoices: []
+      };
+    });
+
+    filteredInvoices.forEach(inv => {
+      if (inv.lines && inv.lines.length > 0) {
+        inv.lines.forEach(l => {
+          const productId = l.fk_product || l.product_id;
+          
+          if (productId && productMap[productId]) {
+            const qty = parseFloat(l.qty || 1);
+            const lineTotalTTC = parseFloat(l.total_ttc || (l.subprice * qty * 1.2) || 0);
+            const lineTotalHT = parseFloat(l.total_ht || (l.subprice * qty) || 0);
+            const lineRemisePct = parseFloat(l.remise_percent || l.remise || 0);
+            const remiseMontant = lineRemisePct > 0 ? (lineTotalHT * (lineRemisePct / 100)) : 0;
+
+            productMap[productId].totalQty += qty;
+            productMap[productId].totalSalesTTC += lineTotalTTC;
+            productMap[productId].totalSalesHT += lineTotalHT;
+            productMap[productId].totalRemise += remiseMontant;
+
+            productMap[productId].invoices.push({
+              invoiceRef: inv.ref,
+              client: inv.socid_name || inv.nom_client || "Client Général",
+              qty,
+              lineTotalTTC,
+              lineRemisePct
+            });
+          }
+        });
+      }
+    });
+
+    return Object.values(productMap).sort((a, b) => b.totalSalesTTC - a.totalSalesTTC);
+  }, [rawProducts, filteredInvoices]);
+
+  const resetFilters = () => {
+    setSearchQuery("");
+    setFilterMonth("ALL");
+    setFilterStatus("ALL");
+    setFilterMode("ALL");
+  };
 
   if (loading) return (
     <div className="container flex items-center justify-center" style={{ minHeight: '60vh' }}>
-      <div className="text-muted" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        <div style={{ fontSize: '3rem', marginBottom: '1rem', animation: 'spin 2s linear infinite' }}>⏳</div>
-        <p style={{ fontWeight: '600', fontSize: '1.25rem' }}>Chargement des données financières...</p>
-      </div>
+      <p style={{ fontWeight: '600', fontSize: '1.25rem' }}>Chargement du Dashboard...</p>
     </div>
   );
 
   return (
     <div className="animate-fade-in" style={{ padding: '20px', color: 'var(--text-primary)' }}>
-      <h2 style={{ fontSize: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}><span>📈</span> Tableau de Bord Financier</h2>
-      <p className="text-muted" style={{ marginBottom: '2rem', fontSize: '1rem', fontWeight: '500' }}>Vue globale de la comptabilité, facturation et trésorerie</p>
 
-      {/* Widgets Financiers */}
-      <div style={{ display: 'flex', gap: '25px', marginTop: '20px', marginBottom: '40px', flexWrap: 'wrap' }}>
-        
-        {/* Widget CA */}
-        <div className="card" style={{ flex: '1 1 200px', padding: '1.75rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid #10b981' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '5rem', opacity: 0.1 }}>💰</div>
-          <h3 style={{ color: 'var(--text-secondary)', marginTop: 0, textTransform: 'uppercase', fontSize: '0.85rem' }}>Chiffre d'Affaires</h3>
-          <strong style={{ fontSize: '2rem', color: '#10b981', display: 'block', marginTop: '1rem' }}>{formatMontant(metrics.ca)}</strong>
+      {/* ── POPUP DATE DE REMBOURSEMENT ───────────────────────────────── */}
+      {rembPopup && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.55)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: '10px', padding: '2rem',
+            minWidth: '340px', boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+            display: 'flex', flexDirection: 'column', gap: '1.25rem'
+          }}>
+            <h3 style={{ margin: 0, color: '#2c2c2c', fontSize: '1.2rem' }}>
+              💸 Confirmer le remboursement
+            </h3>
+            <p style={{ margin: 0, fontSize: '0.95rem', color: '#444' }}>
+              Facture : <strong>{rembPopup.facture.ref}</strong>
+            </p>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: '#555', marginBottom: '0.4rem', fontWeight: '600' }}>
+                📅 Date de remboursement :
+              </label>
+              <input
+                type="date"
+                value={rembDate}
+                onChange={e => setRembDate(e.target.value)}
+                style={{
+                  width: '100%', padding: '0.55rem 0.75rem',
+                  borderRadius: '6px', border: '1.5px solid #d1d5db',
+                  fontSize: '0.95rem', color: '#2c2c2c', background: '#f9fafb'
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setRembPopup(null)}
+                style={{
+                  padding: '0.5rem 1.1rem', borderRadius: '6px',
+                  border: '1px solid #d1d5db', background: '#f3f4f6',
+                  color: '#555', cursor: 'pointer', fontWeight: '600'
+                }}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleConfirmRembourser}
+                disabled={!rembDate}
+                style={{
+                  padding: '0.5rem 1.25rem', borderRadius: '6px',
+                  border: 'none', background: '#d84c2f',
+                  color: '#fff', cursor: rembDate ? 'pointer' : 'not-allowed',
+                  fontWeight: '700', opacity: rembDate ? 1 : 0.5
+                }}
+              >
+                ✅ Confirmer le remboursement
+              </button>
+            </div>
+          </div>
         </div>
+      )}
 
-        {/* Widget Salaires */}
-        <div className="card" style={{ flex: '1 1 200px', padding: '1.75rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid #f43f5e' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '5rem', opacity: 0.1 }}>👥</div>
-          <h3 style={{ color: 'var(--text-secondary)', marginTop: 0, textTransform: 'uppercase', fontSize: '0.85rem' }}>Masse Salariale</h3>
-          <strong style={{ fontSize: '2rem', color: '#f43f5e', display: 'block', marginTop: '1rem' }}>{formatMontant(metrics.salaires)}</strong>
+      {/* HEADER */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1.5rem' }}>
+        <div>
+          <h2 style={{ fontSize: '2rem', display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
+            <span>📊</span> Tableau de Bord & Encaissements
+          </h2>
+          <p className="text-muted" style={{ margin: '0.25rem 0 0 0', fontSize: '1rem' }}>
+            Analyse des encaissements CSV (Caisse / Banque), de la facturation et répartition produit
+          </p>
         </div>
-
-        {/* Widget Taxes & Dépenses */}
-        <div className="card" style={{ flex: '1 1 200px', padding: '1.75rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid #f59e0b' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '5rem', opacity: 0.1 }}>🧾</div>
-          <h3 style={{ color: 'var(--text-secondary)', marginTop: 0, textTransform: 'uppercase', fontSize: '0.85rem' }}>Taxes & Dépenses</h3>
-          <strong style={{ fontSize: '2rem', color: '#f59e0b', display: 'block', marginTop: '1rem' }}>{formatMontant(metrics.taxes + metrics.depenses)}</strong>
-        </div>
-
-        {/* Widget Solde Bancaire */}
-        <div className="card" style={{ flex: '1 1 200px', padding: '1.75rem', position: 'relative', overflow: 'hidden', borderLeft: '4px solid #3b82f6' }}>
-          <div style={{ position: 'absolute', top: '-10px', right: '-10px', fontSize: '5rem', opacity: 0.1 }}>🏦</div>
-          <h3 style={{ color: 'var(--text-secondary)', marginTop: 0, textTransform: 'uppercase', fontSize: '0.85rem' }}>Solde Bancaire</h3>
-          <strong style={{ fontSize: '2rem', color: '#3b82f6', display: 'block', marginTop: '1rem' }}>{formatMontant(metrics.solde)}</strong>
-        </div>
-
       </div>
 
-      {/* Tableau des Flux Récents */}
-      <h3 style={{ fontSize: '1.5rem', color: 'var(--primary-color)', marginTop: '40px', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span>📋</span> Flux Financiers Récents
-      </h3>
-      
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <table className="compact-table" style={{ marginBottom: 0 }}>
-          <thead>
-            <tr>
-              <th style={{ paddingLeft: '1.5rem' }}>Type</th>
-              <th>Référence</th>
-              <th style={{ textAlign: 'center' }}>Date</th>
-              <th style={{ textAlign: 'right' }}>Montant</th>
-              <th style={{ textAlign: 'center' }}>Statut</th>
-            </tr>
-          </thead>
-          <tbody>
-            {recentData.map((item, index) => (
-              <tr key={index}>
-                <td style={{ paddingLeft: '1.5rem', fontWeight: '600', color: item.type === 'Facture' ? '#10b981' : (item.type === 'Salaire' ? '#f43f5e' : '#f59e0b') }}>
-                  {item.type}
-                </td>
-                <td style={{ color: 'var(--text-secondary)', fontWeight: '500' }}>{item.ref || '—'}</td>
-                <td style={{ textAlign: 'center', fontWeight: '500' }}>{formatDate(item.date)}</td>
-                <td style={{ textAlign: 'right', fontWeight: '800' }}>{formatMontant(item.montant)}</td>
-                <td style={{ textAlign: 'center' }}>
-                  <span className="badge" style={{ 
-                    background: '#f1f5f9', 
-                    color: 'var(--text-secondary)',
-                    border: '1px solid #e2e8f0'
-                  }}>
-                    {item.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-            {recentData.length === 0 && (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-                  <div style={{ fontSize: '2rem', marginBottom: '1rem', opacity: 0.5 }}>📭</div>
-                  Aucun flux financier récent trouvé.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <DashboardFilters
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        filterMonth={filterMonth}
+        setFilterMonth={setFilterMonth}
+        filterStatus={filterStatus}
+        setFilterStatus={setFilterStatus}
+        filterMode={filterMode}
+        setFilterMode={setFilterMode}
+        availableMonths={availableMonths}
+        resetFilters={resetFilters}
+        globalKpis={globalKpis}
+      />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <DashboardMonthRecap
+          invoicesByMonth={invoicesByMonth}
+        />
+        <DashboardMonthPanels
+          invoicesByMonth={invoicesByMonth}
+          selectedMonth={selectedMonth}
+          setSelectedMonth={setSelectedMonth}
+          setSelectedInvoiceModal={setSelectedInvoiceModal}
+          remboursementsMap={remboursementsMap}
+          onRembourser={handleRembourser}
+        />
+        <DashboardProductPanels
+          salesByProduct={salesByProduct}
+          setSelectedProductModal={setSelectedProductModal}
+        />
       </div>
+
+      <DashboardInvoiceModal selectedInvoiceModal={selectedInvoiceModal} closeModal={() => setSelectedInvoiceModal(null)} />
+
+      <DashboardProductModal selectedProductModal={selectedProductModal} closeModal={() => setSelectedProductModal(null)} />
+
     </div>
   );
 }

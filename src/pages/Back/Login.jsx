@@ -1,12 +1,13 @@
 // Login.jsx
 import React, { useState } from 'react';
+import { API_CONFIG } from '../../api/configApi';
 
 export default function Login({ onLogin }) {
-  const [code, setCode] = useState('MON_CODE_UNIQUE_123'); // Pré-rempli par défaut
+  const [code, setCode] = useState(API_CONFIG.BACKOFFICE_CODE); // Pré-rempli par défaut
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (code === 'MON_CODE_UNIQUE_123') { // À remplacer par ta logique/variable d'env
+    if (code === API_CONFIG.BACKOFFICE_CODE) { 
       onLogin(code);
     } else {
       alert('Code unique incorrect');

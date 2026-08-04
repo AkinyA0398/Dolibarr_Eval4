@@ -1,0 +1,3 @@
+num_facture,	date_facture,	date_limite_reglement,	code_client	nom_client
+F001,	21/07/2026,	,	C1,	Rakoto
+F002,	14/07/2026,	,	C2,	Rabe
